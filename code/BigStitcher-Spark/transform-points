@@ -1,0 +1,7 @@
+#!/bin/bash
+
+JAR=$HOME/.m2/repository/net/preibisch/BigStitcher-Spark/0.0.2-SNAPSHOT/BigStitcher-Spark-0.0.2-SNAPSHOT.jar
+java \
+  -Xmx64g -Dspark.master=local[16] \
+  -cp $JAR: \
+  net.preibisch.bigstitcher.spark.TransformPoints "$@"
