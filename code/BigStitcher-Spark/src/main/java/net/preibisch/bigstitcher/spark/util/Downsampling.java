@@ -21,6 +21,7 @@
  */
 package net.preibisch.bigstitcher.spark.util;
 
+import java.net.URI;
 import java.util.Date;
 import java.util.List;
 
@@ -30,6 +31,7 @@ import org.janelia.saalfeldlab.n5.Compression;
 import org.janelia.saalfeldlab.n5.DataType;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
+import org.janelia.saalfeldlab.n5.universe.StorageFormat;
 
 import net.imglib2.FinalInterval;
 import net.imglib2.RandomAccessibleInterval;
@@ -40,21 +42,19 @@ import net.imglib2.type.numeric.integer.UnsignedShortType;
 import net.imglib2.type.numeric.real.FloatType;
 import net.imglib2.util.Util;
 import net.imglib2.view.Views;
-import net.preibisch.legacy.io.IOFunctions;
 import net.preibisch.mvrecon.process.downsampling.lazy.LazyHalfPixelDownsample2x;
-import net.preibisch.mvrecon.process.export.ExportN5API.StorageType;
-import net.preibisch.mvrecon.process.export.ExportTools;
+import net.preibisch.mvrecon.process.n5api.N5ApiTools;
 import util.Grid;
 
 public class Downsampling
 {
 	// TODO: this code is almost identical to the code in ExportN5API in multiview-reconstruction (except it's for multi-threading there)
 	public static boolean createDownsampling(
-			final String path,
+			final URI path,
 			final String datasetS0,
 			final N5Writer driverVolumeWriter,
 			final long[] dimensionsS0,
-			final StorageType storageType,
+			final StorageFormat storageType,
 			final int[] blocksize,
 			final DataType datatype,
 			final Compression compression,
@@ -80,7 +80,7 @@ public class Downsampling
 
 			final String datasetDownsampling =
 					bdv ?
-							ExportTools.createDownsampledBDVPath( datasetS0, level, storageType)
+							N5ApiTools.createDownsampledBDVPath( datasetS0, level, storageType)
 							:
 							datasetS0.substring( 0, datasetS0.length() - 3) + "/s" + level;
 
@@ -122,7 +122,8 @@ public class Downsampling
 			rdd.foreach(
 					gridBlock ->
 					{
-						final N5Writer executorVolumeWriter = N5Util.createWriter( path, storageType );
+						final N5Writer executorVolumeWriter =
+								N5Util.createN5Writer( path, storageType );
 
 						try
 						{
@@ -201,18 +202,18 @@ public class Downsampling
 							}
 							else
 							{
-								IOFunctions.println( "Unsupported pixel type: " + datatype );
+								System.out.println( "Unsupported pixel type: " + datatype );
 								throw new RuntimeException("Unsupported pixel type: " + datatype );
 							}
 						}
 						catch (Exception exc) 
 						{
-							IOFunctions.println( "Error writing block offset=" + Util.printCoordinates( gridBlock[0] ) + "' ... " + exc );
+							System.out.println( "Error writing block offset=" + Util.printCoordinates( gridBlock[0] ) + "' ... " + exc );
 							exc.printStackTrace();
 						}
 
-						// not HDF5
-						if ( N5Util.hdf5DriverVolumeWriter != executorVolumeWriter )
+						// if it is not the shared HDF5 writer, then close
+						if ( N5Util.sharedHDF5Writer != executorVolumeWriter )
 							executorVolumeWriter.close();
 					});
 
@@ -226,7 +227,7 @@ public class Downsampling
 		return true;
 	}
 
-	public static boolean testDownsamplingParameters( final boolean multiRes, final List<String> downsampling, final String dataset )
+	public static boolean testDownsamplingParameters( final boolean multiRes, final List<String> downsampling )
 	{
 		// no not create multi-res pyramid
 		if ( !multiRes && downsampling == null )
@@ -236,16 +237,6 @@ public class Downsampling
 		{
 			System.out.println( "If you want to create a multi-resolution pyramid, you must select either automatic (--multiRes) - OR - manual mode (e.g. --downsampling 2,2,1; 2,2,1; 2,2,2)");
 			return false;
-		}
-
-		// non-bdv multi-res dataset
-		if ( dataset != null )
-		{
-			if ( !dataset.endsWith("/s0") )
-			{
-				System.out.println( "In order to create a multi-resolution pyramid for a non-BDV dataset, the dataset must end with '/s0', right not it is '" + dataset + "'.");
-				return false;
-			}
 		}
 
 		return true;

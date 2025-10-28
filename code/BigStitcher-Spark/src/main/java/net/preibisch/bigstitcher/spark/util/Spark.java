@@ -21,43 +21,32 @@
  */
 package net.preibisch.bigstitcher.spark.util;
 
-import static mpicbg.spim.data.XmlKeys.SPIMDATA_TAG;
-
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.PrintWriter;
 import java.io.Serializable;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.apache.spark.SparkEnv;
-import org.janelia.saalfeldlab.n5.KeyValueAccess;
-import org.jdom2.Document;
-import org.jdom2.Element;
-import org.jdom2.input.SAXBuilder;
-import org.jdom2.output.Format;
-import org.jdom2.output.XMLOutputter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import bdv.ViewerImgLoader;
 import mpicbg.spim.data.SpimDataException;
-import mpicbg.spim.data.SpimDataIOException;
 import mpicbg.spim.data.generic.sequence.BasicImgLoader;
 import mpicbg.spim.data.sequence.SequenceDescription;
 import mpicbg.spim.data.sequence.ViewId;
+import net.imglib2.Cursor;
 import net.imglib2.FinalInterval;
 import net.imglib2.FinalRealInterval;
 import net.imglib2.Interval;
+import net.imglib2.RandomAccessibleInterval;
+import net.imglib2.img.Img;
 import net.imglib2.realtransform.AffineTransform3D;
+import net.imglib2.type.numeric.real.DoubleType;
 import net.imglib2.util.Pair;
 import net.imglib2.util.ValuePair;
-import net.preibisch.bigstitcher.spark.cloud.CloudUtil;
-import net.preibisch.bigstitcher.spark.cloud.CloudUtil.ParsedBucket;
-import net.preibisch.legacy.io.IOFunctions;
+import net.imglib2.view.Views;
 import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
 import net.preibisch.mvrecon.fiji.spimdata.XmlIoSpimData2;
 import net.preibisch.mvrecon.fiji.spimdata.interestpoints.InterestPoint;
@@ -65,6 +54,8 @@ import net.preibisch.mvrecon.fiji.spimdata.stitchingresults.PairwiseStitchingRes
 import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.grouping.Group;
 
 public class Spark {
+
+	public static final int maxPartitions = 10_000;
 
 	public static List< ViewId > deserializeViewIds( final int[][] serializedViewIds )
 	{
@@ -174,12 +165,20 @@ public class Spark {
 		return serializedViewIds;
 	}
 
-	public static ArrayList< InterestPoint > deserializeInterestPoints( final double[][] points )
+	public static ArrayList< InterestPoint > deserializeInterestPoints( final RandomAccessibleInterval<DoubleType> points )
 	{
 		final ArrayList< InterestPoint > list = new ArrayList<>();
-		
-		for ( int i = 0; i < points.length; ++i )
-			list.add( new InterestPoint(i, points[ i ] ));
+		final Cursor< DoubleType > cursor = Views.flatIterable( points ).localizingCursor();
+
+		for ( int i = 0; i < points.dimension( 1 ); ++i )
+		{
+			final double[] l = new double[ (int)points.dimension( 0 ) ];
+
+			for ( int d = 0; d < points.dimension( 0 ); ++d )
+				l[ d ] = cursor.next().get();
+
+			list.add( new InterestPoint(i, l ));
+		}
 
 		return list;
 	}
@@ -238,113 +237,69 @@ public class Spark {
 		return sparkEnv == null ? null : sparkEnv.executorId();
 	}
 
-	public static void saveSpimData2(final SpimData2 data, final String xmlPath) throws SpimDataException, IOException
-	{
-		if ( xmlPath.trim().contains( ":/" ) )
-		{
-			//
-			// saving the XML to s3
-			//
-			final ParsedBucket pb = CloudUtil.parseCloudLink( xmlPath );
-			final KeyValueAccess kva = CloudUtil.getKeyValueAccessForBucket( pb );
-
-			// fist make a copy of the XML and save it to not loose it
-			if ( kva.exists( pb.rootDir + "/" + pb.file ) )
-			{
-				int maxExistingBackup = 0;
-				for ( int i = 1; i < XmlIoSpimData2.numBackups; ++i )
-					if ( kva.exists( pb.rootDir + "/" + pb.file + "~" + i ) )
-						maxExistingBackup = i;
-					else
-						break;
-
-				// copy the backups
-				try
-				{
-					for ( int i = maxExistingBackup; i >= 1; --i )
-						CloudUtil.copy(kva, pb.rootDir + "/" + pb.file + "~" + i, pb.rootDir + "/" + pb.file + "~" + (i + 1) );
-
-					CloudUtil.copy(kva, pb.rootDir + "/" + pb.file, pb.rootDir + "/" + pb.file + "~1" );
-				}
-				catch ( final Exception e )
-				{
-					IOFunctions.println( "Could not save backup of XML file: " + e );
-					e.printStackTrace();
-				}
-			}
-
-			final XmlIoSpimData2 io = new XmlIoSpimData2( null );
-
-			final Document doc = new Document( io.toXml( data, new File( ".") ) );
-			final XMLOutputter xout = new XMLOutputter( Format.getPrettyFormat() );
-			final String xmlString = xout.outputString( doc );
-			//System.out.println( xmlString );
-
-			final OutputStream os = kva.lockForWriting( pb.rootDir + "/" + pb.file ).newOutputStream();
-			final PrintWriter pw = new PrintWriter( os );
-			pw.println( xmlString );
-			pw.close();
-			os.close();
-
-			// TODO: interest points are missing ...
-		}
-		else
-		{
-			new XmlIoSpimData2( null ).save( data, xmlPath );
-		}
-	}
-	
 	/**
 	 * @return a new data instance optimized for use within single-threaded Spark tasks.
 	 */
-	public static SpimData2 getSparkJobSpimData2(final String xmlPath)
-			throws SpimDataException {
+	public static SpimData2 getSparkJobSpimData2( final URI xmlPath ) throws SpimDataException
+	{
+		return getJobSpimData2( xmlPath, 0 );
+	}
 
-		final SpimData2 data;
-
-		if ( xmlPath.contains( ":/" ) )
-		{
-			final ParsedBucket pb = CloudUtil.parseCloudLink( xmlPath );
-			final KeyValueAccess kva = CloudUtil.getKeyValueAccessForBucket( pb );
-
-			final SAXBuilder sax = new SAXBuilder();
-			Document doc;
-			try
-			{
-				final InputStream is = kva.lockForReading( pb.rootDir + "/" + pb.file ).newInputStream();
-				doc = sax.build( is );
-			}
-			catch ( final Exception e )
-			{
-				throw new SpimDataIOException( e );
-			}
-
-			final Element docRoot = doc.getRootElement();
-
-			if ( docRoot.getName() != SPIMDATA_TAG )
-				throw new RuntimeException( "expected <" + SPIMDATA_TAG + "> root element. wrong file?" );
-
-			data = new XmlIoSpimData2("").fromXml( docRoot, new File( xmlPath ) );
-		}
-		else
-		{
-			data = new XmlIoSpimData2("").load(xmlPath);
-		}
-
+	/**
+	 * @return a new data instance optimized for multi-threaded tasks.
+	 */
+	public static SpimData2 getJobSpimData2( final URI xmlPath, final int numFetcherThreads ) throws SpimDataException
+	{
+		final SpimData2 data = new XmlIoSpimData2().load(xmlPath);
 		final SequenceDescription sequenceDescription = data.getSequenceDescription();
 
 		// set number of fetcher threads to 0 for spark usage
 		final BasicImgLoader imgLoader = sequenceDescription.getImgLoader();
 		if (imgLoader instanceof ViewerImgLoader) {
-			((ViewerImgLoader) imgLoader).setNumFetcherThreads(0);
+			((ViewerImgLoader) imgLoader).setNumFetcherThreads( numFetcherThreads );
 		}
 
-		LOG.info("getSparkJobSpimData2: loaded {} for xmlPath={} on executorId={}",
-				 data, xmlPath, getSparkExecutorId());
+		//LOG.info("getSparkJobSpimData2: loaded {}, xmlPath={} on executorId={}", data, xmlPath, getSparkExecutorId());
 
 		return data;
 	}
 
 	private static final Logger LOG = LoggerFactory.getLogger(Spark.class);
 
+	public static ArrayList< Pair<ViewId, ViewId> > toViewIds( final List<Pair<ViewId, ViewId>> pairList )
+	{
+		final ArrayList< Pair<ViewId, ViewId> > serializableList = new ArrayList<>();
+
+		pairList.forEach( pair -> serializableList.add(
+				new ValuePair<>(
+						new ViewId(
+								pair.getA().getTimePointId(),
+								pair.getA().getViewSetupId()),
+						new ViewId(
+								pair.getB().getTimePointId(),
+								pair.getB().getViewSetupId())
+						)));
+
+		return serializableList;
+	}
+
+	public static ArrayList< Pair<Group<ViewId>, Group<ViewId>> > toGroupViewIds( final List<Pair<Group<ViewId>, Group<ViewId>>> pairList )
+	{
+		final ArrayList< Pair<Group<ViewId>, Group<ViewId>> > serializableList = new ArrayList<>();
+
+		pairList.forEach( pair -> serializableList.add(
+				new ValuePair<>(
+						toGroupViewIds( pair.getA() ),
+						toGroupViewIds( pair.getB() ) )));
+
+		return serializableList;
+	}
+
+	public static Group<ViewId> toGroupViewIds( final Group<ViewId> group )
+	{
+		return new Group<>(
+				group.getViews().stream().map( viewId -> new ViewId(
+						viewId.getTimePointId(),
+						viewId.getViewSetupId()) ).collect( Collectors.toList() ) );
+	}
 }

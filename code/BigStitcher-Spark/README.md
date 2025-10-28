@@ -6,24 +6,25 @@
 
 [![install4j](https://www.ej-technologies.com/images/product_banners/install4j_small.png)](https://www.ej-technologies.com/products/install4j/overview.html)
 
-This package allows you to run compute-intense parts of BigStitcher distributed on your workstation, a cluster or the cloud using Apache Spark. The following modules are currently available in BigStitcher-Spark listed as `JavaClassName`/`cmd-line-tool-name` (you can find documentation below, but a good start is also to just check out the cmd-line arguments, they mostly follow the BigStitcher GUI; each module takes an existing XML):
+This package allows you to run compute-intense parts of BigStitcher distributed on your workstation, a cluster or the cloud using Apache Spark. The following modules are currently available in BigStitcher-Spark listed as `JavaClassName`/**`cmd-line-tool-name`** (you can find documentation below, but a good start is also to just check out the cmd-line arguments, they mostly follow the BigStitcher GUI; each module takes an existing XML):
 
-* `SparkResaveN5`/`resave` (resave an XML dataset you defined in BigStitcher - use virtual loading only - into N5 for processing)
-* `SparkInterestPointDetection`/`detect-interestpoints` (detect interest points for alignment)
-* `SparkGeometricDescriptorMatching`/`match-interestpoints` (perform pair-wise interest point matching)
-* `SparkPairwiseStitching`/`stitching` (run pairwise stitching between overlapping tiles)
-* `Solver`/`solver` (perform the global solve, works with interest points and stitching)
-* `SparkAffineFusion`/`affine-fusion` (fuse the aligned dataset using affine models, including translation)
-* `SparkNonRigidFusion`/`nonrigid-fusion` (fuse the aligned dataset using non-rigid models)
+* `SparkResaveN5`/**`resave`** (resave an XML dataset you defined in BigStitcher - use virtual loading only - into N5 for processing)
+* `SparkInterestPointDetection`/**`detect-interestpoints`** (detect interest points for alignment)
+* `SparkGeometricDescriptorMatching`/**`match-interestpoints`** (perform pair-wise interest point matching)
+* `SparkPairwiseStitching`/**`stitching`** (run pairwise stitching between overlapping tiles)
+* `Solver`/**`solver`** (perform the global solve, works with interest points and stitching)
+* `CreateFusionContainer`/**`create-fusion-container`** (set up the container into which the affine fusion will write it's data, now supports OME-ZARR)
+* `SparkAffineFusion`/**`affine-fusion`** (fuse the aligned dataset using interpolated affine/rigid/translation models)
+* `SparkNonRigidFusion`/**`nonrigid-fusion`** (fuse the aligned dataset using non-rigid models)
 
 Additonally there are some utility methods:
-* `SparkDownsample`/`downsample` (perform downsampling of existing volumes)
-* `ClearInterestPoints`/`clear-interestpoints` (clears interest points)
-* `ClearRegistrations`/`clear-registrations` (clears registrations)
+* `SparkDownsample`/**`downsample`** (perform downsampling of existing volumes)
+* `ClearInterestPoints`/**`clear-interestpoints`** (clears interest points)
+* `ClearRegistrations`/**`clear-registrations`** (clears registrations)
 
 ***Note: BigStitcher-Spark is designed to work hand-in-hand with BigStitcher.** You can always verify the results of each step BigStitcher-Spark step interactively using BigStitcher by simply opening the XML. You can of course also run certain steps in BigStitcher, and others in BigStitcher-Spark. Not all functionality is 100% identical between BigStitcher and BigStitcher-Spark; important differences in terms of capabilities is described in the respective module documentation below (typically BigStitcher-Spark supports a specific feature that was hard to implement in BigStitcher and vice-versa).*
 
-### Content
+## Content
 
 * [**Install and Run**](#install)
   * [Local](#installlocal)
@@ -37,6 +38,8 @@ Additonally there are some utility methods:
   * [Match Interest Points](#ip-match)
   * [Solver](#solver)
   * [Affine Fusion](#affine-fusion)
+    * [Create Fusion Container](#create-fusion-container)
+    * [Run Affine Fusion](#run-affine-fusion)
   * [Non-Rigid Fusion](#nonrigid-fusion)
 
 <img align="left" src="https://github.com/JaneliaSciComp/BigStitcher-Spark/blob/main/src/main/resources/bs-spark.png" alt="Overview of the BigStitcher-Spark pipeline">
@@ -45,7 +48,7 @@ Additonally there are some utility methods:
 
 ### To run it on your local computer<a name="installlocal">
 
-* Prerequisites:  Java and maven must be installed.
+* Prerequisites:  **Java** (_[Zulu JDK 8 + FX](https://www.azul.com/downloads/?version=java-8-lts&package=jdk-fx#zulu) is tested, and Java >=21 currently does not work with the Spark version used_) and **[Apache Maven](https://maven.apache.org)** must be installed. Try `java -version` and `mvn -v` to confirm their functionality and versions. You have to set the `JAVA_HOME` environment variable for Maven to find the right Java.
 * Clone the repo and `cd` into `BigStitcher-Spark`
 * Run the included bash script `./install -t <num-cores> -m <mem-in-GB> ` specifying the number of cores and available memory in GB for running locally. This should build the project and create the executable `resave`, `detect-interestpoints`, `register-interestpoints`, `stitching`, `solver`, `affine-fusion`, `nonrigid-fusion`, `downsample`, `clear-interestpoints` and `clear-registrations` in the working directory.
 
@@ -67,12 +70,14 @@ Please ask your sysadmin for help how to run it on your **cluster**, below are h
 
 #### Instructions/stories how people set up Spark/BigStitcher-Spark on their respective clusters:
 * HHMI Janelia (LSF cluster): [Tutorial on YouTube](https://youtu.be/D3Y1Rv_69xI?si=mp_57Jby0T2ETP0p&t=5520) by [@trautmane](https://github.com/trautmane)
+* MDC Berlin (SGE cluster): [Google doc explaining the steps](https://docs.google.com/document/d/119jxXk-w3GWZ3IvpMXlAclE8ZeNXniiuO3YScMyImUQ/edit?usp=sharing) by [@bellonet](https://github.com/bellonet)
+* ***We are currently developing a generic [NextFlow](https://www.nextflow.io)-based pipeline for submitting BigStitcher-Spark jobs to a cluster***
 
 ### To run it on the cloud<a name="installcloud">
 
 `mvn clean package -P fatjar` builds `target/BigStitcher-Spark-0.0.1-SNAPSHOT.jar` for distribution.
 
-For running the fatjar on the **cloud** check out services such as [Amazon EMR](https://docs.aws.amazon.com/emr/latest/ReleaseGuide/emr-spark.html). An implementations of image readers and writers that support cloud storage can be found [here](https://github.com/bigdataviewer/bigdataviewer-omezarr). Note that running it on the cloud is an ongoing effort with [@kgabor](https://github.com/kgabor), [@tpietzsch](https://github.com/tpietzsch) and the AWS team that currently works as a prototype but is further being optimized. We will provide an updated documentation in due time. Note that some modules support prefetching `--prefetch`, which is important for cloud execution due to its delays as it pre-loads all image blocks in parallel before processing.
+BigStitcher-Spark is now fully "cloud-native". For running the fatjar on the **cloud** check out services such as [Amazon EMR](https://docs.aws.amazon.com/emr/latest/ReleaseGuide/emr-spark.html) and [Google Serverless Batches](https://cloud.google.com/dataproc-serverless/docs/quickstarts/spark-batch). Note that some modules support prefetching `--prefetch`, which is important for cloud execution due to its delays as it pre-loads all image blocks in parallel before processing. We will soon add detailled information on how to run the examples on both cloud platforms (it works - if you need help now, please contact @StephanPreibisch).
 
 ## Example Datasets<a name="examples">
 
@@ -95,9 +100,9 @@ We provide two example datasets (one for *interest-point based registration*, on
 
 For this tutorial I extracted the Stitching dataset into `~/SparkTest/Stitching` and the dataset for experimenting with interest points into `~/SparkTest/IP`.
 
-## Usage<a name="usage">
+# Usage<a name="usage">
 
-### Resave Dataset<a name="resave">
+## Resave Dataset<a name="resave">
 
 When working with BigStitcher the first step is to [define a dataset](https://imagej.net/plugins/bigstitcher/define-new-dataset), where the goal is to provide sufficient meta-data in order to allow BigStitcher (and BigDataViewer) to load your images. This step is typically done in the BigStitcher GUI, but some people have written scripts to automatically generate XML's for their datasets (e.g. [here](https://github.com/nvladimus/npy2bdv/tree/v1.0.0)). If you want to start testing an entire BigStitcher(-Spark) pipeline from scratch, please use [this dataset for stitching](https://drive.google.com/file/d/15xSQCBHcpEvJWd6YD5iKJzuc0IRpWB8a/view?usp=sharing) or [this one using interest points](https://drive.google.com/file/d/1VFT2APVPItBCyzrQ7dPWBNILyNh6yDKB/view?usp=sharing).
 
@@ -117,7 +122,7 @@ Please run `resave` without parameters to get help for all command line argument
 
 ***Note:*** `--dryRun` allows the user to test the functionality without writing any data. The Spark implementation parallelizes over user-defined blocks across all input images at once, so also few, very big images will be processed efficiently.
 
-### Pairwise Stitching<a name="stitching">
+## Pairwise Stitching<a name="stitching">
 
 To perform classical stitching (translation only), first pair-wise stitching between all overlapping tiles needs to be computed. So far we only support standard grouping where all channels and illuminations of a specific Tile will be grouped together as one image and stitching is performed individually per Timepoint and Angle. To run the stitching with default paramters you can run the following command on this [example dataset](https://drive.google.com/file/d/1Q2SCJW_tCVKFzrdMrgVrFDyiF6nUN5-B/view?usp=sharing):
 
@@ -131,7 +136,7 @@ You can choose which Tiles `--tileId`, Channels `--channelId`, Iluminations `--i
 
 ***Note:*** `--dryRun` allows the user to test the functionality without writing any data. The Spark implementation parallelizes over pairs of images.
 
-### Detect Interest Points<a name="ip-detect">
+## Detect Interest Points<a name="ip-detect">
 
 Interest-point based registration is generally more reliable and faster than stitching while supporting various transformation models including **(regularized) Translation**, **(regularized) Rigid**, **(regularized) Affine**, and **Non-Rigid**. At the same time parameter selection is more involved. The first step is to detect interest points in the images. A typical command line call that works well on [this example dataset](https://drive.google.com/file/d/16V8RBYP3TNrDVToT9BoRxqclGE15TwKM/view?usp=sharing) looks as follows:
 
@@ -150,7 +155,7 @@ You can choose which Tiles `--tileId`, Channels `--channelId`, Iluminations `--i
 <img align="left" src="https://github.com/JaneliaSciComp/BigStitcher-Spark/blob/main/src/main/resources/BigStitcher-interestpoints.jpg" alt="Visualizing interest points in BigStitcher">
 &nbsp;
 
-### Match Interest Points<a name="ip-match">
+## Match Interest Points<a name="ip-match">
 
 After interest points are detected they are pair-wise matching between all views/images (***Note: this also works for Stitching, try it out***). Several point cloud matching methods and ways how views can be grouped are supported, which will be explained below. Importantly, matching & solving can be performed once or iteratively; typical workflows that match & solve more than once are 1) to first align each timepoint of a series using affine models individually followed by registration across time using translation models or 2) to first align using geometric descriptor matching to then subsequently refine the result using Iterative Closest Point (ICP) that only works once the current transformation is very good (***Note:*** ICP alignment creates many corresponding interest points that might be desirable for [Non-Rigid fusion](#nonrigid-fusion) where all corresponding interest points are perfectly matched on top of each other).
 
@@ -186,7 +191,7 @@ When performing timeseries alignment, grouping is often a good choice (`--splitT
 
 ***Note:*** `--dryRun` allows the user to test the functionality without writing any data. The Spark implementation parallelizes over pairs of images.
 
-### Solver<a name="#solver">
+## Solver<a name="#solver">
 
 The Solver computes a globally optimized result (one transformation per view/image) using all pairwise matches (interest points or stitching), specifically by minimizing the distance between all corresponding points (paiwise stitching is also expressed as a set of corresponding points) across all images/views. A typical call for running the solver on **stitching** results is (e.g. [this dataset](https://drive.google.com/file/d/1we4Iif17bdS4PiWsgRTi3TLNte8scG4u/view?usp=sharing)):
 
@@ -214,9 +219,48 @@ When using interestpoints (for timeseries alignment with grouping all views of a
 
 ***Note:*** `--dryRun` allows the user to test the functionality without writing any data. The solver currently only runs multi-threaded.
 
-### Affine Fusion<a name="affine-fusion">
+## Affine Fusion<a name="affine-fusion">
 
-Performs **fusion using affine transformation models** computed by the [solve](#solver) (including translations) that are stored in the XML (*Warning: not tested on 2D*). By default the affine fusion will create an output image that contains all transformed input views/images. While this is good in some cases such as tiled stitching tasks, the output volume can be unnecessarily large for e.g. multi-view datasets. Thus, prior to running the fusion it might be useful to [**define a custom bounding box**](https://imagej.net/plugins/bigstitcher/boundingbox) in BigStitcher.
+Performs **fusion using affine transformation models** computed by the [solve](#solver) (also supports translations, rigid, interpolated models) that are stored in the XML (*Warning: not tested on 2D*). By default the affine fusion will create an output image that encompasses all transformed input views/images. While this is good in some cases such as tiled stitching tasks, the output volume can be unnecessarily large for e.g. multi-view datasets. Thus, prior to running the fusion it might be useful to [**define a custom bounding box**](https://imagej.net/plugins/bigstitcher/boundingbox) in BigStitcher.
+
+### Create Fusion Container<a name="create-fusion-container">
+
+The first step for fusing a dataset is to create an empty **output container** that also contains all metadata and empty multi-resolution pyramids. By default an **OME-ZARR** is created, **N5** and **HDF5** are also supported (note that HDF5 only works if Spark is run multi-threaded on a local computer, i.e. not on a cluster or the cloud). By default, this will create an output container that contains a 3D volume for each channel and timepoint present in the dataset (i.e. `numChannels x numTimepoints` 3D volumes). In the case of OME-ZARR, it is represented as a single 5D volume, for N5 and HDF5 it is a series of 3D volumes. ***Note: if you do NOT want to export the entire project, or want to specify fusion assignments (which views/images are fused into which volume), please check the details below. In short, you can specify the dimensions of the output container here, and the fusion assignments in the affine-fusion step below.***
+
+A typical call for creating an output container for e.g. the **stitching** dataset is (e.g. [this dataset](https://drive.google.com/file/d/1ajjk4piENbRrhPWlR6HqoUfD7U7d9zlZ/view?usp=sharing)):
+
+<code>./create-fusion-container -x ~/SparkTest/Stitching/dataset.xml -o ~/SparkTest/Stitching/Stitching/fused.zarr --preserveAnisotropy --multiRes -d UINT8</code>
+
+The **output container** for the [dataset that was aligned using interest points](https://drive.google.com/file/d/13b0UzWuvpT_qL7JFFuGY9WWm-VEiVNj7/view?usp=sharing) can be created in the same way, except that we choose to use the bounding box `embryo` that was specified using BigStitcher and we choose to save as an BDV/BigStitcher project using N5 as underlying export data format:
+
+<code>./create-fusion-container -x ~/SparkTest/IP/dataset.xml -o ~/SparkTest/IP/fused.n5 -xo ~/SparkTest/IP/dataset-fused.xml -s N5 -b embryo --bdv --multiRes -d UINT8</code>
+
+Running `create-fusion-container` without parameters lists help for all command line arguments. `-x` specifies the XML, `-o` defines the output volume location and `-s` the output type `OME-ZARR`, `N5`, or `HDF5` (latter only when running on a local computer). `--multiRes` will create multiresolution pyramids of the fused image(s), `-ds` allows to optionally specify the downsampling steps for the multiresolution pyramid manually. `--bdv` will create fused volumes together with an XML that can be directly opened by **BigStitcher** or **BigDataViewer**, where `-xo` defines the location of the XML for the fused dataset.
+
+You can specify the *datatype* for the fused image using `-d`, `UINT8` *[0..255]*, `UINT16` *[0..65535]* or `FLOAT32` (default) are supported. When selecting UINT8 or UINT16 you can set `--minIntensity` and `--maxIntensity`, which define the range of input intensities that will be mapped to *[0..255]* for `UINT8` or *[0..65535]* for `UINT16`, respectively. The default values are *[0..255]* for `UINT8` or *[0..65535]* for `UINT16`, which works well if input and output datatype are the same.
+
+You can specify a bounding box using `-b`. `--preserveAnisotropy` will preserve the anisotropy of the input dataset, which is a recommended setting if all views/images are taken in the same orientation, e.g. when processing a tiled dataset. The factor will be computed from the data by default, or can be specified using `--anisotropyFactor`.
+
+`-c` allows to specify the compression method, `-cl` set the compression level if supported by the compression method. `--blockSize` defaults to `128x128x128`, which you might want to reduce when using HDF5.
+
+`--numChannels` allows you to override the number of channels in the fused output dataset, by default it will be as many channels as present in the BigStitcher project/XML. Similarly, `--numTimepoints` allows you to override the number of timepoint in the fused noutput dataset, by default it will be as many timepoints as present in the BigStitcher project/XML. ***Note: If (and only if) you specify `--numChannels` or `--numTimepoints` you MUST specify in the `affine-fusion` which ViewIds are fused into which 3D volume, since the assignment deviates from the BigStitcher project/XML. By default, all tiles/angles/illuminations for each channel and timepoint will be fused together.**
+
+`--s3Region` allows to specify a specifc AWS region when saving to AWS S3.
+
+***Note: creating the container for fusion is NOT Spark code (i.e. not distributed), just plain Java code, the fusion itself below is Spark code.***
+
+### Run Affine Fusion<a name="run-affine-fusion">
+
+This is not updated yet, in short you just need to run e.g. <code>./affine-fusion -o ~/SparkTest/Stitching/Stitching/fused.zarr</code> that points to the container you created before. 
+
+Importantly, one can fuse several volumes into the same N5, ZARR or HDF5 container by running the fusion consecutively and specifying different folders or BDV ViewIds.
+
+You can choose which Tiles `--tileId`, Channels `--channelId`, Iluminations `--illuminationId`, Angles `--angleId` and Timepoints `--timepointId` will be processed. For fusion  one normally chooses a specific timepoint and channel, e.g. `--timepointId 18 --channelId 0` to only fuse timepoint 18 and Channel 0 into a single volume. If you would like to choose Views more fine-grained, you can specify their ViewIds directly, e.g. `-vi '0,0' -vi '0,1'` to process ViewId 0 & 1 of Timepoint 0. 
+`--blockScale` defines how many blocks to fuse in a single processing step, e.g. 4,4,1 means for blockSize of 128,128,64 that each spark thread processes 512,512,64 blocks.
+
+***Note:*** `--dryRun` allows the user to test the functionality without writing any data. It scales to large datasets as it tests for each block that is written which images are overlapping. For cloud execution one can additionally pre-fetch all input data for each compute block in parallel. You need to specify the `XML` of a BigSticher project and decide which channels, timepoints, etc. to fuse. 
+
+OLD DOCUMENTATION:
 
 A typical set of calls (because it is three channels) for affine fusion into a multi-resolution ZARR using only translations on the **stitching** dataset is (e.g. [this dataset](https://drive.google.com/file/d/1ajjk4piENbRrhPWlR6HqoUfD7U7d9zlZ/view?usp=sharing)):
 
@@ -238,16 +282,8 @@ In additon to the opening methods mentioned above, you can also directly open th
 
 ***Note: since both acquisitions have more than one channel or timepoint it is important to fuse these into seperate output volumes, respectively.***
 
-Running `affine-fusion` without parameters lists help for all command line arguments. `-o` defines the output volume base location and `-s` the output type `N5`, `ZARR`, or `HDF5` (latter only when running on a single computer). Importantly, one can fuse several volumes into the same N5, ZARR or HDF5 container by running the fusion consecutively and specifying different folders or BDV ViewIds. `--bdv` will create fused volumes together with an XML that can be directly opened by  **BigStitcher** or **BigDataViewer**, where `-xo` defines the location of the XML for the fused dataset. Alternatively, you need to specify a dataset location instead using `-d`. `--multiRes` will create multiresolution pyramids of the fused image; when using `-d` the dataset needs to end with `s0` in order to be able to create the multiresolution pyramid. `-ds` allows to optionally specify the downsampling steps for the multiresolution pyramid manually.
-
-You can fuse the image using datatypes `--UINT8` *[0..255]*, `--UINT16` *[0..65535]* or by default `--FLOAT32`. UINT8 and UINT16 requires you to set `--minIntensity` and `--maxIntensity`, which define the range of intensities that will be mapped to *[0..255]* or *[0..65535]*, respectively. If you want to specify a bounding box use `-b`. `--preserveAnisotropy` will preserve the anisotropy of the input dataset, which is a recommended setting if all views/images are taken in the same orientation, e.g. when processing a tiled dataset.
-
-`--blockSize` defaults to `128x128x128`, which you might want to reduce when using HDF5. `--blockScale` defines how many blocks to fuse in a single processing step, e.g. 4,4,1 means for blockSize of 128,128,64 that each spark thread processes 512,512,64 blocks.
-
-You can choose which Tiles `--tileId`, Channels `--channelId`, Iluminations `--illuminationId`, Angles `--angleId` and Timepoints `--timepointId` will be processed. For fusion  one normally chooses a specific timepoint and channel, e.g. `--timepointId 18 --channelId 0` to only fuse timepoint 18 and Channel 0 into a single volume. If you would like to choose Views more fine-grained, you can specify their ViewIds directly, e.g. `-vi '0,0' -vi '0,1'` to process ViewId 0 & 1 of Timepoint 0. **By default, all images/views will be fused into a single volume, which is usually not desired.**
-
 ***Note:*** `--dryRun` allows the user to test the functionality without writing any data. It scales to large datasets as it tests for each block that is written which images are overlapping. For cloud execution one can additionally pre-fetch all input data for each compute block in parallel. You need to specify the `XML` of a BigSticher project and decide which channels, timepoints, etc. to fuse. 
 
-### Non-Rigid Fusion<a name="nonrigid-fusion">
+## Non-Rigid Fusion<a name="nonrigid-fusion">
 
 `nonrigid-fusion` performs **non-rigid distributed fusion** using `net.preibisch.bigstitcher.spark.SparkNonRigidFusion`. The arguments are identical to the [Affine Fusion](#affine-fusion), and one needs to additionally define the corresponding **interest points**, e.g. `-ip beads` that will be used to compute the non-rigid transformation.

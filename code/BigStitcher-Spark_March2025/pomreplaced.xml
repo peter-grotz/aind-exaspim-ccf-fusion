@@ -1,0 +1,468 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.scijava</groupId>
+        <artifactId>pom-scijava</artifactId>
+        <version>39.0.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>net.preibisch</groupId>
+    <artifactId>BigStitcher-Spark</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+
+    <name>BigStitcher Spark</name>
+    <description>Spark-based parallel BigStitcher project.</description>
+    <url>https://github.com/JaneliaSciComp/BigStitcher-Spark</url>
+    <inceptionYear>2021</inceptionYear>
+    <organization>
+        <name>Fiji</name>
+        <url>https://fiji.sc/</url>
+    </organization>
+    <licenses>
+        <license>
+            <name>GNU General Public License v2+</name>
+            <url>https://www.gnu.org/licenses/gpl.html</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>StephanPreibisch</id>
+            <name>Stephan Preibisch</name>
+            <url>http://imagej.net/User:StephanP</url>
+            <roles>
+                <role>founder</role>
+                <role>lead</role>
+                <role>developer</role>
+                <role>debugger</role>
+                <role>reviewer</role>
+                <role>support</role>
+                <role>maintainer</role>
+            </roles>
+        </developer>
+    </developers>
+
+    <contributors>
+		<contributor>
+			<name>Marwan Zouinkhi</name>
+		</contributor>
+		<contributor>
+			<name>Tobias Pietzsch</name>
+			<url>https://imagej.net/people/tpietzsch</url>
+		</contributor>
+    </contributors>
+
+    <mailingLists>
+        <mailingList>
+            <name>ImageJ Forum</name>
+            <archive>https://forum.image.sc/</archive>
+        </mailingList>
+    </mailingLists>
+
+    <scm>
+        <connection>scm:git:https://github.com/JaneliaSciComp/BigStitcher-Spark</connection>
+        <developerConnection>scm:git:git@github.com:JaneliaSciComp/BigStitcher-Spark</developerConnection>
+        <tag>HEAD</tag>
+        <url>https://github.com/JaneliaSciComp/BigStitcher-Spark</url>
+    </scm>
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>https://github.com/JaneliaSciComp/BigStitcher-Spark/issues</url>
+    </issueManagement>
+    <ciManagement>
+        <system>GitHub Actions</system>
+        <url>https://github.com/JaneliaSciComp/BigStitcher-Spark/actions</url>
+    </ciManagement>
+
+    <properties>
+		<package-name>net.preibisch.bigstitcher.spark</package-name>
+
+        <!-- <scijava.jvm.version>1.8</scijava.jvm.version> -->
+        <license.licenseName>bsd</license.licenseName>
+        <license.copyrightOwners>Developers.</license.copyrightOwners>
+
+		<!--
+		<imglib2.version>7.1.2</imglib2.version>
+		<imglib2-realtransform.version>4.0.3</imglib2-realtransform.version>
+		<imglib2-cache.version>1.0.0-beta-19</imglib2-cache.version>
+		<imglib2-algorithm.version>0.16.0</imglib2-algorithm.version>
+		<imglib2-roi.version>0.15.1</imglib2-roi.version>
+		<n5-imglib2.version>7.0.2</n5-imglib2.version>
+		<bigdataviewer-core.version>10.6.1</bigdataviewer-core.version>
+		<bigdataviewer-vistools.version>1.0.0-beta-36</bigdataviewer-vistools.version>
+		-->
+		<!-- <n5-zarr.version>1.3.5</n5-zarr.version> -->
+
+		<bigdataviewer-core.version>10.6.3</bigdataviewer-core.version>
+		<spim_data.version>2.3.5</spim_data.version>
+		<multiview-reconstruction.version>5.0.4</multiview-reconstruction.version>
+		<BigStitcher.version>2.3.1</BigStitcher.version>
+
+		<!--for the old bioformats to work properly (compared with old main branch to find out)-->
+		<ome-codecs.version>0.3.0</ome-codecs.version>
+
+    </properties>
+
+    <repositories>
+        <!-- NB: for project parent -->
+        <repository>
+            <id>imagej.public</id>
+            <url>https://maven.imagej.net/content/groups/public</url>
+        </repository>
+        <repository>
+            <id>jitpack.io</id>
+            <url>https://jitpack.io</url>
+        </repository>
+    </repositories>
+    <dependencies>
+        <dependency>
+            <groupId>sc.fiji</groupId>
+            <artifactId>bigdataviewer-core</artifactId>
+            <!-- <version>10.4.6</version> -->
+        </dependency>
+        <dependency>
+            <groupId>sc.fiji</groupId>
+            <artifactId>bigdataviewer-vistools</artifactId>
+            <!-- <version>1.0.0-beta-32</version> -->
+        </dependency>
+        <dependency>
+            <groupId>net.imglib2</groupId>
+            <artifactId>imglib2-cache</artifactId>
+            <!-- <version>1.0.0-beta-17</version> -->
+        </dependency>
+		<dependency>
+			<groupId>net.imglib2</groupId>
+			<artifactId>imglib2</artifactId>
+			<!-- <version>6.3.0</version> -->
+		</dependency>
+		<dependency>
+			<groupId>net.imglib2</groupId>
+			<artifactId>imglib2-algorithm</artifactId>
+			<!-- <version>0.15.0</version> -->
+		</dependency>
+		<dependency>
+			<groupId>org.bigdataviewer</groupId>
+			<artifactId>bigdataviewer-n5</artifactId>
+			<version>1.0.1</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>javax.annotation</groupId>
+                    <artifactId>javax.annotation-api</artifactId>
+                </exclusion>
+            </exclusions>
+		</dependency>
+        <dependency>
+            <groupId>sc.fiji</groupId>
+            <artifactId>spim_data</artifactId>
+        </dependency>
+        <!-- <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-java-sdk-s3</artifactId>
+            <version>${aws-java-sdk-s3.version}</version>
+        </dependency> -->
+        <!-- <dependency>
+            <groupId>org.bigdataviewer</groupId>
+            <artifactId>bigdataviewer-omezarr</artifactId>
+            <version>0.2.3</version>
+        </dependency> -->
+        <dependency>
+            <groupId>org.janelia.saalfeldlab</groupId>
+            <artifactId>n5</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.janelia.saalfeldlab</groupId>
+            <artifactId>n5-zarr</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.janelia.saalfeldlab</groupId>
+            <artifactId>n5-aws-s3</artifactId>
+            <version>4.2.2-SNAPSHOTWEST</version> 
+            <!-- <version>4.0.0</version> -->
+        </dependency>
+<!--        Scala is sensitive to fasterxml version -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.13.4</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.spark</groupId>
+<!--            Spark 3.3.2 release comes with scala 2.12.15 -->
+            <artifactId>spark-core_2.12</artifactId>
+            <version>3.3.2</version>
+            <exclusions>
+                <exclusion>
+                    <artifactId>netty-all</artifactId>
+                    <groupId>io.netty</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>netty</artifactId>
+                    <groupId>io.netty</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>jcl-over-slf4j</artifactId>
+                    <groupId>org.slf4j</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>jul-to-slf4j</artifactId>
+                    <groupId>org.slf4j</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>slf4j-log4j12</artifactId>
+                    <groupId>org.slf4j</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>aopalliance-repackaged</artifactId>
+                    <groupId>org.glassfish.hk2.external</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>javax.inject</artifactId>
+                    <groupId>org.glassfish.hk2.external</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>jersey-client</artifactId>
+                    <groupId>org.glassfish.jersey.core</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>jersey-core</artifactId>
+                    <groupId>com.sun.jersey</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>lz4</artifactId>
+                    <groupId>net.jpountz.lz4</groupId>
+                </exclusion>
+                <exclusion>
+                    <artifactId>jets3t</artifactId>
+                    <groupId>net.java.dev.jets3t</groupId>
+                </exclusion>
+                <!--<exclusion>
+                        <groupId>com.esotericsoftware</groupId>
+                        <artifactId>kryo-shaded</artifactId>
+                </exclusion>-->
+                <exclusion>
+                        <groupId>javax.xml.stream</groupId>
+                        <artifactId>stax-api</artifactId>
+                </exclusion>
+            </exclusions>
+            <!--<scope>provided</scope>-->
+        </dependency>
+        <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala-library</artifactId>
+            <version>2.12.15</version>
+        </dependency>
+        <dependency>
+            <groupId>net.preibisch</groupId>
+            <artifactId>multiview-reconstruction</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>ch.epfl.biop</groupId>
+                    <artifactId>ijp-kheops</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.esotericsoftware</groupId>
+                    <artifactId>reflectasm</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>ome</groupId>
+                    <artifactId>formats-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>ome</groupId>
+                    <artifactId>formats-bsd</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>ome</groupId>
+                    <artifactId>formats-gpl</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+            <version>4.1.68.Final</version>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty</artifactId>
+            <version>3.9.9.Final</version>
+        </dependency>
+        <dependency>
+            <groupId>info.picocli</groupId>
+            <artifactId>picocli</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.janelia.saalfeldlab</groupId>
+            <artifactId>n5-hdf5</artifactId>
+            <!-- <version>2.0.0</version> -->
+        </dependency>
+        <dependency>
+            <groupId>org.janelia.saalfeldlab</groupId>
+            <artifactId>n5-imglib2</artifactId>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/net.java.dev.jna/jna needed for M1 native library loading -->
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna</artifactId>
+            <version>5.7.0</version>
+        </dependency>
+        <dependency>
+            <groupId>net.preibisch</groupId>
+            <artifactId>BigStitcher</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>ch.epfl.biop</groupId>
+                    <artifactId>ijp-kheops</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.esotericsoftware</groupId>
+                    <artifactId>reflectasm</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>ome</groupId>
+                    <artifactId>formats-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>ome</groupId>
+                    <artifactId>formats-bsd</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>ome</groupId>
+                    <artifactId>formats-gpl</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <!-- old bioformats -->
+        <dependency>
+            <groupId>org.openmicroscopy</groupId>
+            <artifactId>ome-common</artifactId>
+            <version>6.0.4</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.esotericsoftware.kryo</groupId>
+                    <artifactId>kryo</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>ome</groupId>
+            <artifactId>formats-bsd</artifactId>
+            <version>6.5.1</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.esotericsoftware.kryo</groupId>
+                    <artifactId>kryo</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>ome</groupId>
+            <artifactId>formats-gpl</artifactId>
+            <version>6.5.1</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>ch.systems.cisd</groupId>
+                    <artifactId>jhdf5</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.esotericsoftware.kryo</groupId>
+                    <artifactId>kryo</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+    </dependencies>
+
+    <profiles>
+        <profile>
+            <id>fatjar</id>
+            <build>
+                <plugins>
+                    <!-- Maven shade for Uber Jar -->
+                    <!-- https://maven.apache.org/plugins/maven-shade-plugin/shade-mojo.html -->
+                    <!-- https://databricks.gitbooks.io/databricks-spark-knowledge-base/content/troubleshooting/missing_dependencies_in_jar_files.html -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-shade-plugin</artifactId>
+                        <configuration>
+                            <!-- Do not minimize for now to speed up packaging. -->
+                            <transformers combine.children="append">
+                                <transformer
+                                        implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                                    <resource>META-INF/json/mpicbg.spim.data.generic.sequence.ImgLoaderIo</resource>
+                                </transformer>
+                                <transformer
+                                        implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                                    <resource>META-INF/json/org.janelia.saalfeldlab.n5.Compression$CompressionType</resource>
+                                </transformer>
+                            </transformers>
+                            <!--<minimizeJar>true</minimizeJar> -->
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>Angle0.tif</exclude>
+                                        <exclude>LICENSE</exclude>
+                                        <exclude>LICENSE.txt</exclude>
+                                        <exclude>META-INF/DEPENDENCIES</exclude>
+                                        <exclude>META-INF/LICENSE</exclude>
+                                        <exclude>META-INF/NOTICE</exclude>
+                                        <exclude>META-INF/BSDL</exclude>
+                                        <exclude>META-INF/COPYING</exclude>
+                                        <exclude>META-INF/LEGAL</exclude>
+                                        <exclude>META-INF/LICENSE.RUBY</exclude>
+                                        <exclude>META-INF/json/org.scijava.plugin.Plugin</exclude>
+                                        <exclude>META-INF/*.MF</exclude>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                        <exclude>META-INF/*.txt</exclude>
+                                        <exclude>module-info.class</exclude>
+                                        <exclude>plugins.config</exclude>
+					                    <exclude>META-INF/versions/9/module-info.class</exclude>
+					                    <exclude>META-INF/okio.kotlin_module</exclude>
+                                        <exclude>META-INF/services/com.fasterxml.jackson.core.JsonFactory</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <!-- Additional configuration. -->
+                            <artifactSet>
+                                <excludes>
+				                    <exclude>xpp3:xpp3</exclude>
+                                </excludes>
+                            </artifactSet>
+                            <relocations>
+                                <relocation>
+                                    <pattern>org.apache.commons.compress</pattern>
+                                    <shadedPattern>org.janelia.saalfeldlab.org.apache.commons.compress</shadedPattern>
+                                </relocation>
+                                <!-- Protect newer gson version from the old one preloaded by spark -->
+                                <relocation>
+                                    <pattern>com.google.gson</pattern>
+                                    <shadedPattern>org.janelia.saalfeldlab.com.google.gson</shadedPattern>
+                                </relocation>
+                            </relocations>
+                        </configuration>
+                        <!-- binds by default to package phase -->
+                        <executions>
+                            <execution>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>shade</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- Maven shade end -->
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+</project>

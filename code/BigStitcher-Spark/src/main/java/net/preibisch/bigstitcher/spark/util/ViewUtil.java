@@ -50,9 +50,42 @@ import net.imglib2.util.LinAlgHelpers;
 import net.imglib2.util.Util;
 import net.imglib2.view.IntervalView;
 import net.imglib2.view.MixedTransformView;
+import util.Grid;
 
 public class ViewUtil
 {
+	// code from: https://stackoverflow.com/questions/852665/command-line-progress-bar-in-java
+	public static void progressPercentage(int remain, int total) {
+		if (remain > total) {
+			throw new IllegalArgumentException();
+		}
+		int maxBareSize = 10; // 10unit for 100%
+		int remainProcent = ((100 * remain) / total) / maxBareSize;
+		char defaultChar = '-';
+		String icon = "*";
+		String bare = new String(new char[maxBareSize]).replace('\0', defaultChar) + "]";
+		StringBuilder bareDone = new StringBuilder();
+		bareDone.append("[");
+		for (int i = 0; i < remainProcent; i++) {
+			bareDone.append(icon);
+		}
+		String bareRemain = bare.substring(remainProcent, bare.length());
+		System.out.print("\r" + bareDone + bareRemain + " " + remainProcent * 10 + "%");
+		if (remain == total) {
+			System.out.print("\n");
+		}
+	}
+
+	public static void main(String[] args) {
+		for (int i = 0; i <= 200; i = i + 20) {
+			progressPercentage(i, 200);
+			try {
+				Thread.sleep(500);
+			} catch (Exception e) {
+			}
+		}
+	}
+
 	public static long size( final Interval interval )
 	{
 		if ( interval == null || interval.numDimensions() == 0 )
@@ -73,6 +106,8 @@ public class ViewUtil
 
 	public static Dimensions getDimensions(final SpimData data, final ViewId viewId ) throws IllegalArgumentException
 	{
+		return data.getSequenceDescription().getViewDescription( viewId ).getViewSetup().getSize();
+		/*
 		final ImgLoader imgLoader = data.getSequenceDescription().getImgLoader();
 		final SetupImgLoader<?> setupImgLoader = imgLoader.getSetupImgLoader(viewId.getViewSetupId());
 		if (setupImgLoader == null) {
@@ -80,6 +115,7 @@ public class ViewUtil
 					"failed to find setupImgLoader for " + viewIdToString(viewId) + " in " + data);
 		}
 		return setupImgLoader.getImageSize(viewId.getTimePointId() );
+		*/
 	}
 
 	public static ViewRegistration getViewRegistration(final SpimData data, final ViewId viewId ) throws IllegalArgumentException
@@ -106,6 +142,18 @@ public class ViewUtil
 		final ViewRegistration reg = getViewRegistration( data, viewId );
 
 		return Intervals.smallestContainingInterval( reg.getModel().estimateBounds( new FinalInterval( dim ) ) );
+	}
+
+	/**
+	 * Get the estimated bounding box of the specified view in world coordinates.
+	 * This transforms the image dimension for {@code viewId} with the {@code
+	 * ViewRegistration} for {@code viewId}, and takes the bounding box.
+	 */
+	public static Interval getTransformedBoundingBox( final SpimData data, final ViewId viewId, final AffineTransform3D t ) throws IllegalArgumentException
+	{
+		final Dimensions dim = getDimensions( data, viewId );
+
+		return Intervals.smallestContainingInterval( t.estimateBounds( new FinalInterval( dim ) ) );
 	}
 
 	public static String viewIdToString(final ViewId viewId) {
@@ -200,71 +248,120 @@ public class ViewUtil
 			transformToSource = null;
 		}
 
+		// this failed for the AllenOMEZarrLoader because the RandomAccessibleInterval< ? > img is .view().slice( 4, 0 ).slice( 3, 0 );
+		// TODO: I added some copy of the code below that assumes a 128x128x64 blocksize, this should be fixed. But better this than a non-working code ...
 		if ( ! ( rai instanceof AbstractCellImg ) )
 		{
-			throw new IllegalArgumentException( "TODO. Handling source types other than CellImg is not implemented yet" );
+			// use some random blocksize and fetch for all
+			final List<long[][]> grid = Grid.create( new FinalInterval( img ).dimensionsAsLongArray(), new int[] { 128, 128, 64 } );
+
+			final int n = img.numDimensions();
+			final BoundingBox cellBBox = new BoundingBox( n );
+			final long[] cellMin = cellBBox.corner1;
+			final long[] cellMax = cellBBox.corner2;
+
+			final BoundingBox projectedCellBBox;
+			final Interval projectedCellInterval;
+			final int m = img.numDimensions(); // should be always ==3
+			projectedCellBBox = new BoundingBox( m );
+			projectedCellInterval = FinalInterval.wrap( projectedCellBBox.corner1, projectedCellBBox.corner2 );
+
+			for ( final long[][] block : grid )
+			{
+				final long[] offset = block[ 0 ];
+				final long[] size = block[ 1 ];
+
+				for ( int d = 0; d < n; ++d )
+				{
+					cellMin[ d ] = offset[ d ];
+					cellMax[ d ] = cellMin[ d ] + size[ d ] - 1;
+				}
+
+				if ( transformToSource == null )
+				{
+					expand( cellBBox, expand, projectedCellBBox );
+				}
+				else
+				{
+					transform( transformToSource, projectedCellBBox, cellBBox );
+					expand( projectedCellBBox, expand );
+				}
+
+				final Interval bounds = Intervals.smallestContainingInterval(
+						imgToWorld.estimateBounds( projectedCellInterval ) );
+
+				if ( overlaps( bounds, fusedBlock ) )
+				{
+					System.out.println( Arrays.toString( offset ) + ", " + Arrays.toString( size ) );
+
+					prefetch.add( new PrefetchPixel<>( rai, cellMin.clone() ) );
+				}
+			}
+
+			//throw new IllegalArgumentException( "TODO. Handling source types other than CellImg is not implemented yet, rai is=" + rai.getClass().getName() );
 		}
-
-		// Brute force search for overlapping cells:
-		//
-		// For each grid cell, estimate its bounding box in world space and test
-		// for intersection with fusedBlock
-		//
-		// TODO: BigVolumeViewer has a more sophisticated method for
-		//       intersecting the View Frustum with the source grid and
-		//       determining overlapping cells. This is similar and could be
-		//       re-used here to make the search more efficient. It should
-		//       provide more accurate results because it uses non-axis aligned
-		//       planes for intersection. See class FindRequiredBlocks.
-		//
-		// TODO: The following works for the hyperslice views currently produced by ZarrImageLoader
-		//       (from https://github.com/bigdataviewer/bigdataviewer-omezarr)
-		//       However, for the general case, the logic should be inverted:
-		//       Project the "fused" bounding box into source coordinates (see
-		//       above), because that is well-defined.
-		//       In contrast, the code below performs a projection onto the
-		//       "fused" hyper-slice, which can lead to non-required blocks
-		//       being loaded.
-
-		// iterate all cells (intervals) in grid
-		final CellGrid grid = ( ( AbstractCellImg< ?, ?, ?, ? > ) rai ).getCellGrid();
-
-		final int n = grid.numDimensions();
-		final long[] gridPos = new long[ n ];
-		final BoundingBox cellBBox = new BoundingBox( n );
-		final long[] cellMin = cellBBox.corner1;
-		final long[] cellMax = cellBBox.corner2;
-
-		final BoundingBox projectedCellBBox;
-		final Interval projectedCellInterval;
-		final int m = img.numDimensions(); // should be always ==3
-		projectedCellBBox = new BoundingBox( m );
-		projectedCellInterval = FinalInterval.wrap( projectedCellBBox.corner1, projectedCellBBox.corner2 );
-
-		final IntervalIterator gridIter = new LocalizingIntervalIterator( grid.getGridDimensions() );
-		while( gridIter.hasNext() )
+		else
 		{
-			gridIter.fwd();
-			gridIter.localize( gridPos );
-			grid.getCellInterval( gridPos, cellMin, cellMax );
-
-			if ( transformToSource == null )
+			// Brute force search for overlapping cells:
+			//
+			// For each grid cell, estimate its bounding box in world space and test
+			// for intersection with fusedBlock
+			//
+			// TODO: BigVolumeViewer has a more sophisticated method for
+			//       intersecting the View Frustum with the source grid and
+			//       determining overlapping cells. This is similar and could be
+			//       re-used here to make the search more efficient. It should
+			//       provide more accurate results because it uses non-axis aligned
+			//       planes for intersection. See class FindRequiredBlocks.
+			//
+			// TODO: The following works for the hyperslice views currently produced by ZarrImageLoader
+			//       (from https://github.com/bigdataviewer/bigdataviewer-omezarr)
+			//       However, for the general case, the logic should be inverted:
+			//       Project the "fused" bounding box into source coordinates (see
+			//       above), because that is well-defined.
+			//       In contrast, the code below performs a projection onto the
+			//       "fused" hyper-slice, which can lead to non-required blocks
+			//       being loaded.
+	
+			// iterate all cells (intervals) in grid
+			final CellGrid grid = ( ( AbstractCellImg< ?, ?, ?, ? > ) rai ).getCellGrid();
+	
+			final int n = grid.numDimensions();
+			final long[] gridPos = new long[ n ];
+			final BoundingBox cellBBox = new BoundingBox( n );
+			final long[] cellMin = cellBBox.corner1;
+			final long[] cellMax = cellBBox.corner2;
+	
+			final BoundingBox projectedCellBBox;
+			final Interval projectedCellInterval;
+			final int m = img.numDimensions(); // should be always ==3
+			projectedCellBBox = new BoundingBox( m );
+			projectedCellInterval = FinalInterval.wrap( projectedCellBBox.corner1, projectedCellBBox.corner2 );
+	
+			final IntervalIterator gridIter = new LocalizingIntervalIterator( grid.getGridDimensions() );
+			while( gridIter.hasNext() )
 			{
-				expand( cellBBox, expand, projectedCellBBox );
+				gridIter.fwd();
+				gridIter.localize( gridPos );
+				grid.getCellInterval( gridPos, cellMin, cellMax );
+	
+				if ( transformToSource == null )
+				{
+					expand( cellBBox, expand, projectedCellBBox );
+				}
+				else
+				{
+					transform( transformToSource, projectedCellBBox, cellBBox );
+					expand( projectedCellBBox, expand );
+				}
+	
+				final Interval bounds = Intervals.smallestContainingInterval(
+						imgToWorld.estimateBounds( projectedCellInterval ) );
+	
+				if ( overlaps( bounds, fusedBlock ) )
+					prefetch.add( new PrefetchPixel<>( rai, cellMin.clone() ) );
 			}
-			else
-			{
-				transform( transformToSource, projectedCellBBox, cellBBox );
-				expand( projectedCellBBox, expand );
-			}
-
-			final Interval bounds = Intervals.smallestContainingInterval(
-					imgToWorld.estimateBounds( projectedCellInterval ) );
-
-			if ( overlaps( bounds, fusedBlock ) )
-				prefetch.add( new PrefetchPixel<>( rai, cellMin.clone() ) );
 		}
-
 //		prefetch.forEach( System.out::println );
 		return prefetch;
 	}

@@ -2,16 +2,13 @@ package net.preibisch.bigstitcher.spark.cloud;
 
 import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.io.PrintWriter;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
 
@@ -23,25 +20,13 @@ import org.janelia.saalfeldlab.n5.DataType;
 import org.janelia.saalfeldlab.n5.GzipCompression;
 import org.janelia.saalfeldlab.n5.KeyValueAccess;
 import org.janelia.saalfeldlab.n5.N5Writer;
-import org.janelia.saalfeldlab.n5.universe.N5Factory;
+import org.janelia.saalfeldlab.n5.universe.StorageFormat;
 
 import mpicbg.spim.data.SpimDataException;
-import mpicbg.spim.data.sequence.ViewId;
-import net.preibisch.bigstitcher.spark.util.Spark;
-import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
-import net.preibisch.mvrecon.fiji.spimdata.interestpoints.InterestPoint;
-import net.preibisch.mvrecon.fiji.spimdata.interestpoints.InterestPoints;
-import net.preibisch.mvrecon.fiji.spimdata.interestpoints.InterestPointsN5;
-import net.preibisch.mvrecon.fiji.spimdata.interestpoints.ViewInterestPointLists;
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
+import util.URITools;
 
-/**
- * How to read/write: https://opendal.apache.org/docs/quickstart
- * How to use S3: https://opendal.apache.org/docs/services/s3
- * GitHub: https://github.com/apache/opendal
- * Supported architectures: https://repo1.maven.org/maven2/org/apache/opendal/opendal-java/0.45.1/
- */
 public class TestCloudFunctions implements Callable<Void>
 {
 	@Option(names = "--repartition", description = "specify number of Spark partitions (note to set spark.dynamicAllocation.enabled=false on AWS), if set to 0 as many partitions as jobs will be created.")
@@ -50,13 +35,13 @@ public class TestCloudFunctions implements Callable<Void>
 	@Option(names = "--localSparkBindAddress", description = "specify Spark bind address as localhost")
 	private boolean localSparkBindAddress = false;
 
-	@Option(names = "--testAWSBucketAccess", description = "location for testing s3 reading/writing")
-	private String testAWSBucketAccess = null;
+	@Option(names = "--testBucketWriting", description = "location for testing s3/gc reading/writing, e.g. s3://mybucket/ or gc://mybucket/")
+	private String testBucketWriting = null;
 
 	@Override
 	public Void call() throws SpimDataException, IOException
 	{
-		System.out.println( "Starting AWS test  @ " + new Date( System.currentTimeMillis() ) );
+		System.out.println( "Starting Cloud processing, reading & writing test  @ " + new Date( System.currentTimeMillis() ) );
 
 		//Operating system name
 		System.out.println("Your OS name -> " + System.getProperty("os.name"));
@@ -67,38 +52,63 @@ public class TestCloudFunctions implements Callable<Void>
 		//Operating system architecture
 		System.out.println("Your OS Architecture -> " + System.getProperty("os.arch"));
 
-		if ( testAWSBucketAccess != null )
+		// Test reading
+		System.out.println( "Test reading XML from Janelia ..." );
+
+		final String readBucket = "s3://janelia-bigstitcher-spark/";
+		final String readDataset = "Stitching/dataset.xml";
+
+		System.out.println( "Trying to get KeyValueAccess for " + URI.create( readBucket ) );
+		URITools.s3Region = "us-east-1";
+		final KeyValueAccess kva = URITools.getKeyValueAccess( URI.create( readBucket ) );
+
+		System.out.print( "Does " + readDataset + " exist? " );
+		System.out.println( kva.exists( readBucket + readDataset ) );
+
+		if ( kva.exists( readBucket + readDataset ) )
 		{
-			final KeyValueAccess kva = CloudUtil.getKeyValueAccessForBucket( "s3://janelia-bigstitcher-spark/" );
-	
-			System.out.println( kva.exists( "/Stitching/dataset.xml" ) );
-			CloudUtil.copy(kva, "/Stitching/dataset.xml", "/Stitching/dataset-2.xml" );
-	
-			final BufferedReader reader = CloudUtil.openFileReadCloud(kva, "/Stitching/dataset.xml" );
-			System.out.println( reader.lines().collect(Collectors.joining("\n") ).substring(0, 200) + " ... " );
-			reader.close();
-	
-			if ( kva.exists( "dataset-test.txt" ) )
-				kva.delete( "dataset-test.txt" );
-	
-			final PrintWriter writer = CloudUtil.openFileWriteCloud( kva, "dataset-test.txt" );
+			final BufferedReader reader = URITools.openFileReadCloudReader( kva, URI.create( readBucket + readDataset ) );
+			System.out.println( reader.lines().collect(Collectors.joining("\n") ).substring(0, 500) + " ... [cut off] " );
+			reader.close();	
+		}
+
+		if ( testBucketWriting != null )
+		{
+			if ( !testBucketWriting.endsWith( "/") )
+				testBucketWriting = testBucketWriting + "/";
+
+			URITools.s3Region = null;
+
+			System.out.println( "Trying to get KeyValueAccess for " + URI.create( testBucketWriting ) );
+			final KeyValueAccess kvaWrite = URITools.getKeyValueAccess( URI.create( testBucketWriting ) );
+
+			final long timeStamp = System.currentTimeMillis();
+			final String testFile = "dataset-test" + timeStamp + ".txt";
+
+			System.out.println( "Writing random file: " + URI.create( testBucketWriting + testFile ) );
+			final PrintWriter writer = URITools.openFileWriteCloudWriter( kvaWrite, URI.create( testBucketWriting + testFile ) );
 			writer.println( "test " + new Date( System.currentTimeMillis() ) );
 			writer.close();
-	
-			//System.exit( 0 );
-	
-			System.out.println( "Creating N5 container @ " + new Date( System.currentTimeMillis() ) );
-			N5Writer w = new N5Factory().createWriter( "s3://janelia-bigstitcher-spark/testcontainer_"+ System.currentTimeMillis() +".n5" );
-			w.createDataset( "test",
+
+			System.out.println( "Creating N5 container " + timeStamp + ".n5" );
+			final N5Writer n5writer = URITools.instantiateN5Writer( StorageFormat.N5, URI.create( testBucketWriting + timeStamp +".n5" ) );
+
+			n5writer.createDataset( "test",
 					new long[] { 128, 128, 128 },
 					new int[] { 64,64,32},
 					DataType.FLOAT32,
 					new GzipCompression( 1 ) );
-	
-			//System.exit( 0 );
+
+			n5writer.close();
+
+			System.out.println( "Done with test bucket writing ..." );
+		}
+		else
+		{
+			System.out.println( "testBucketWriting is null, not testing writing..." );
 		}
 
-		System.out.println( "Starting AWS-Spark test @ " + new Date( System.currentTimeMillis() ) );
+		System.out.println( "Starting SPARK test @ " + new Date( System.currentTimeMillis() ) );
 
 		final SparkConf conf = new SparkConf().setAppName("TestDAL");
 
@@ -141,7 +151,6 @@ public class TestCloudFunctions implements Callable<Void>
 			System.out.println("Executor ID: " + executorId);
 			System.out.println("Processing: " + i[0] + " @ " + new Date( System.currentTimeMillis() ) );
 
-			//testS3Write( "worker_"+ i[0] );
 			try { Thread.sleep( 2 * 1000 ); }
 			catch (InterruptedException e) { e.printStackTrace(); }
 
