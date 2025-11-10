@@ -3,7 +3,13 @@
 set -ex
 
  
- s3_xml_path=$1
+ # Extract bigstitcher xml path
+json_path="../data/exaspim_manifest1.json"
+path=$(jq -r '."zarr_multiscale"."input_uri"' "$json_path")
+base="${path%%/fusion/*}"
+s3_xml_path="${base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.xml"
+
+# Set output zarr location
  zarr_location=$2
  job_name=$(echo "$s3_xml_path" | awk -F'/' '{print $4}')
  
