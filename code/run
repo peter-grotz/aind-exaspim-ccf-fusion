@@ -31,7 +31,7 @@ s3_xml_path="${base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.
  #--------------------------------#
   
 
- sh ~/capsule/code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar -x  ${s3_xml_path}  -o ${zarr_location} -d UINT16  --multiRes --blockSize 256,256,256 -s ZARR --anisotropyFactor 1
+ sh ~../code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar -x  ${s3_xml_path}  -o ${zarr_location} -d UINT16  --multiRes --blockSize 256,256,256 -s ZARR --anisotropyFactor 1
 
 
  # 1) Create application
