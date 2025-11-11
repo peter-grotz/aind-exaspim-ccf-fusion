@@ -1,4 +1,3 @@
-JAR=/code/BigStitcher-Spark/target/BigStitcher-Spark-0.1.0-SNAPSHOT.jar
 java \
   -Xmx96g -Dspark.master=local[12] \
   -cp /code/BigStitcher-Spark_March2025/target/BigStitcher-Spark-0.1.0-SNAPSHOT.jar \
