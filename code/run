@@ -29,8 +29,12 @@ s3_xml_path="${base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.
  #--------------------------------#
  #--------------------------------#
  #--------------------------------#
-  
-sh ./code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
+
+pwd
+ls /code
+ls /capsule
+
+sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
   -x "${s3_xml_path}" \
   -o "${zarr_location}" \
   -d UINT16 \
