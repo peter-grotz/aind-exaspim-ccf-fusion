@@ -34,7 +34,7 @@ pwd
 ls /code
 ls /capsule
 
-sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
+sh ../code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
   -x "${s3_xml_path}" \
   -o "${zarr_location}" \
   -d UINT16 \
