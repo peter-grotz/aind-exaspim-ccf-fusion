@@ -10,7 +10,7 @@ base="${path%%/fusion/*}"
 s3_xml_path="${base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.xml"
 
 # Set output zarr location
- zarr_location=$2
+ zarr_location="${base}/fusion/fused_ccf_ch.zarr"
  job_name=$(echo "$s3_xml_path" | awk -F'/' '{print $4}')
  
  echo "$job_name"
