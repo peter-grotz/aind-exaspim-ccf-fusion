@@ -83,6 +83,7 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
      echo $app_state
  done
  aws emr-serverless start-application \
+     --region us-west-2 \
      --application-id $APPLICATION_ID
  echo "Job Started"
  
