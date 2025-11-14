@@ -121,6 +121,7 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
      sleep 10
      # monitor job progress
      get_job_state=$(aws emr-serverless get-job-run \
+         --region us-west-2 \
          --application-id $APPLICATION_ID \
          --job-run-id $JOB_RUN_ID)
      job_state=$(echo $get_job_state | /usr/bin/jq --raw-output '.jobRun.state')
