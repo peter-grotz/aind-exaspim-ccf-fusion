@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>TestN5Loading.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark.cloud</a> &gt; <span class="el_source">TestN5Loading.java</span></div><h1>TestN5Loading.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark.cloud;
+
+import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
+
+import bdv.ViewerImgLoader;
+import ij.ImageJ;
+import mpicbg.spim.data.SpimDataException;
+import mpicbg.spim.data.generic.sequence.BasicImgLoader;
+import net.preibisch.bigstitcher.spark.util.Spark;
+import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.XmlIoSpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.explorer.ViewSetupExplorer;
+import util.URITools;
+
+<span class="nc" id="L38">public class TestN5Loading</span>
+{
+	/*
+	public static &lt;T extends NativeType&lt;T&gt; &amp; RealType&lt;T&gt;&gt; void testBDV() throws IOException, URISyntaxException
+	{
+		final N5Reader n5 = new N5Factory().openReader(&quot;s3://janelia-bigstitcher-spark/Stitching/dataset.n5&quot;);
+
+		String[] l = n5.list( &quot;/&quot; );
+
+		for ( final String s : l )
+			System.out.println(s);
+
+		final String n5Dataset = &quot;/setup0/timepoint0/s0/&quot;;
+		final RandomAccessibleInterval&lt;T&gt; img = N5Utils.openVolatile(n5, n5Dataset);
+
+		BdvFunctions.show(
+				VolatileViews.wrapAsVolatile( img ),
+				n5Dataset,
+				BdvOptions.options()).setDisplayRange(0, 255);
+	}
+
+	public static &lt;S extends NativeType&lt;S&gt; &amp; IntegerType&lt;S&gt;, T extends NativeType&lt;T&gt; &amp; RealType&lt;T&gt;&gt; void testInterestPoints() throws IOException
+	{
+		final N5Reader n5 = new N5Factory().openReader(&quot;s3://janelia-bigstitcher-spark/Stitching/interestpoints.n5&quot;);
+
+		String[] l = n5.list( &quot;/&quot; );
+
+		for ( final String s : l )
+			System.out.println( s );
+
+		final RandomAccessibleInterval&lt; S &gt; id = N5Utils.open(n5, l[2] + &quot;/beads/interestpoints/id&quot; );
+		final RandomAccessibleInterval&lt; T &gt; loc = N5Utils.open(n5, l[2] + &quot;/beads/interestpoints/loc&quot; );
+
+		System.out.println( &quot;id: &quot; + Util.printInterval( id ));
+		System.out.println( &quot;loc: &quot; + Util.printInterval( loc ));
+
+		final long numPoints = id.dimension( 1 );
+
+		final RandomAccess&lt; S &gt; idR = id.randomAccess();
+		final RandomAccess&lt; T &gt; locR = loc.randomAccess();
+
+		idR.setPosition( new long[] { 0, 0 } );
+		locR.setPosition( new long[] { 0, 0 } );
+
+		for ( long i = 0; i &lt; numPoints; ++i )
+		{
+			System.out.print( &quot;id=&quot; + idR.setPositionAndGet( 0, i ) );
+
+			System.out.println( &quot;, [&quot; + locR.setPositionAndGet( 0, i ) + &quot;, &quot; + locR.setPositionAndGet( 1, i ) + &quot;, &quot; + locR.setPositionAndGet( 2, i ) + &quot;]&quot;);
+
+		}
+	}
+
+	public static void testLoadInterestPoints() throws SpimDataException, IOException
+	{
+		final SpimData2 data = Spark.getSparkJobSpimData2( &quot;s3://janelia-bigstitcher-spark/Stitching/dataset.xml&quot; );
+
+		System.out.println( &quot;num viewsetups: &quot; + data.getSequenceDescription().getViewSetupsOrdered().size() );
+
+		final Map&lt;ViewId, ViewInterestPointLists&gt; ips = data.getViewInterestPoints().getViewInterestPoints();
+		final ViewInterestPointLists ipl = ips.values().iterator().next();
+		final InterestPoints ip = ipl.getHashMap().values().iterator().next();
+		
+		System.out.println(&quot;base dir: &quot; + ip.getBaseDir() );
+		System.out.println(&quot;base dir modified: &quot; + InterestPointsN5.assembleURI( ip.getBaseDir(), InterestPointsN5.baseN5 ) );
+
+		List&lt;InterestPoint&gt; ipList = ip.getInterestPointsCopy();
+
+		System.out.println( &quot;Loaded &quot; + ipList.size() + &quot; interest points.&quot;);
+
+		System.out.println( &quot;Saving s3://janelia-bigstitcher-spark/Stitching/dataset-save.xml ...&quot;);
+
+		Spark.saveSpimData2( data, &quot;s3://janelia-bigstitcher-spark/Stitching/dataset-save.xml&quot; );
+
+		System.out.println( &quot;Done.&quot;);
+	}
+	*/
+	public static void testBigStitcherGUI( final URI xml ) throws SpimDataException
+	{
+<span class="nc" id="L117">		new ImageJ();</span>
+
+<span class="nc" id="L119">		final SpimData2 data = Spark.getSparkJobSpimData2( xml );</span>
+
+<span class="nc" id="L121">		final BasicImgLoader imgLoader = data.getSequenceDescription().getImgLoader();</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">		if (imgLoader instanceof ViewerImgLoader)</span>
+<span class="nc" id="L123">			((ViewerImgLoader) imgLoader).setNumFetcherThreads(-1);</span>
+
+		
+<span class="nc" id="L126">		final ViewSetupExplorer&lt; SpimData2 &gt; explorer = new ViewSetupExplorer&lt;&gt;( data, xml, new XmlIoSpimData2() );</span>
+
+<span class="nc" id="L128">		explorer.getFrame().toFront();</span>
+<span class="nc" id="L129">	}</span>
+
+	public static void main( String[] args ) throws IOException, URISyntaxException, SpimDataException
+	{
+		//CloudUtil.parseCloudLink( &quot;s3://janelia-bigstitcher-spark/Stitching/dataset.xml&quot; );
+
+		//testLoadInterestPoints();
+		//testBigStitcherGUI( &quot;s3://janelia-bigstitcher-spark/Stitching/dataset.xml&quot; );
+		//testBigStitcherGUI( &quot;/Users/preibischs/Documents/Janelia/Projects/BigStitcher/Allen/bigstitcher_emr_708369_2024-04-23_06-52-14_2.xml&quot; );
+		//testBigStitcherGUI( &quot;/home/preibischs@hhmi.org/Desktop/Allen/bigstitcher_emr_708369_2024-04-23_06-52-14_2.xml&quot; );
+<span class="nc" id="L139">		testBigStitcherGUI( URITools.toURI( &quot;/Users/preibischs/Documents/Janelia/Projects/BigStitcher/Allen/bigstitcher_emr_708369_2024-04-23_06-52-14_2.xml&quot; ) );</span>
+		//s3://aind-open-data/exaSPIM_708369_2024-04-08_15-20-36_flatfield-correction_2024-04-16_20-33-12/SPIM.ome.zarr
+		//testBDV();
+		//testInterestPoints();
+<span class="nc" id="L143">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

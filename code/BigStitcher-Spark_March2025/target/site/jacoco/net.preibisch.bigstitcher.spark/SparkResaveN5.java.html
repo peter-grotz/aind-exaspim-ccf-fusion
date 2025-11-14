@@ -1,0 +1,370 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SparkResaveN5.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark</a> &gt; <span class="el_source">SparkResaveN5.java</span></div><h1>SparkResaveN5.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark;
+
+import java.io.Serializable;
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.stream.Collectors;
+
+import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.bigdataviewer.n5.N5CloudImageLoader;
+import org.janelia.saalfeldlab.n5.Compression;
+import org.janelia.saalfeldlab.n5.DataType;
+import org.janelia.saalfeldlab.n5.N5Writer;
+import org.janelia.saalfeldlab.n5.universe.N5Factory.StorageFormat;
+import org.janelia.scicomp.n5.zstandard.ZstandardCompression;
+
+import bdv.img.n5.N5ImageLoader;
+import mpicbg.spim.data.sequence.ViewId;
+import net.imglib2.util.Util;
+import net.imglib2.util.ValuePair;
+import net.preibisch.bigstitcher.spark.CreateFusionContainer.Compressions;
+import net.preibisch.bigstitcher.spark.abstractcmdline.AbstractBasic;
+import net.preibisch.bigstitcher.spark.util.Import;
+import net.preibisch.bigstitcher.spark.util.N5Util;
+import net.preibisch.bigstitcher.spark.util.Spark;
+import net.preibisch.mvrecon.fiji.plugin.resave.Resave_HDF5;
+import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.XmlIoSpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.imgloaders.AllenOMEZarrLoader;
+import net.preibisch.mvrecon.process.n5api.N5ApiTools;
+import net.preibisch.mvrecon.process.n5api.N5ApiTools.MultiResolutionLevelInfo;
+import picocli.CommandLine;
+import picocli.CommandLine.Option;
+import util.URITools;
+
+<span class="nc" id="L63">public class SparkResaveN5 extends AbstractBasic implements Callable&lt;Void&gt;, Serializable</span>
+{
+	/*
+	-x '/Users/preibischs/Documents/Microscopy/Stitching/Truman/testspark/dataset.xml'
+	-xo '/Users/preibischs/Documents/Microscopy/Stitching/Truman/testspark/dataset-n5.xml'
+	-ds '1,1,1; 2,2,1; 4,4,1; 8,8,2'
+	*/
+
+	// TOOD: there is a bug:
+	// -x s3://janelia-bigstitcher-spark/Stitching/dataset.xml -xo /Users/preibischs/SparkTest/Stitching/dataset.xml
+	// sets the wrong path for the N5:
+	// file:/Users/preibischs/workspace/BigStitcher-Spark/file:/Users/preibischs/SparkTest/Stitching-fromcloud/dataset.n5
+	
+	private static final long serialVersionUID = 1890656279324908516L;
+
+<span class="nc" id="L78">	@Option(names = { &quot;-xo&quot;, &quot;--xmlout&quot; }, required = false, description = &quot;path to the output BigStitcher xml, e.g. /home/project-n5.xml or s3://myBucket/dataset.xml (default: overwrite input and keep a backup ~1)&quot;)</span>
+	private String xmlOutURIString = null;
+
+<span class="nc" id="L81">	private URI xmlOutURI = null;</span>
+
+<span class="nc" id="L83">	@Option(names = { &quot;--N5&quot; }, description = &quot;Export as N5 (default: OMEZARR)&quot;)</span>
+	private boolean useN5 = false;
+
+<span class="nc" id="L86">	@Option(names = &quot;--blockSize&quot;, description = &quot;blockSize, you can use smaller blocks for HDF5 (default: 128,128,64)&quot;)</span>
+	private String blockSizeString = &quot;128,128,64&quot;;
+
+<span class="nc" id="L89">	@Option(names = &quot;--blockScale&quot;, description = &quot;how many blocks to use for a single processing step, e.g. 4,4,1 means for blockSize a 128,128,32 that each spark thread writes 512,512,32 (default: 16,16,1)&quot;)</span>
+	private String blockScaleString = &quot;16,16,1&quot;;
+
+<span class="nc" id="L92">	@Option(names = { &quot;-ds&quot;, &quot;--downsampling&quot; }, description = &quot;downsampling pyramid (must contain full res 1,1,1 that is always created), e.g. 1,1,1; 2,2,1; 4,4,1; 8,8,2 (default: automatically computed)&quot;)</span>
+	private String downsampling = null;
+
+<span class="nc" id="L95">	@Option(names = {&quot;-c&quot;, &quot;--compression&quot;}, defaultValue = &quot;Zstandard&quot;, showDefaultValue = CommandLine.Help.Visibility.ALWAYS,</span>
+			description = &quot;Dataset compression&quot;)
+	private Compressions compression = null;
+
+<span class="nc" id="L99">	@Option(names = {&quot;-cl&quot;, &quot;--compressionLevel&quot; }, description = &quot;compression level, if supported by the codec (default: gzip 1, Zstandard 3, xz 6)&quot;)</span>
+	private Integer compressionLevel = null;
+
+<span class="nc" id="L102">	@Option(names = { &quot;-o&quot;, &quot;--n5Path&quot; }, description = &quot;N5/OME-ZARR path for saving, (default: 'folder of the xml'/dataset.n5 or e.g. s3://myBucket/data.n5)&quot;)</span>
+	private String n5PathURIString = null;
+
+	@Override
+	public Void call() throws Exception
+	{
+<span class="nc" id="L108">		this.setRegion();</span>
+
+		//System.out.println( com.google.common.collect.ImmutableList.class.getProtectionDomain().getCodeSource().getLocation() );
+		//System.exit( 0 );
+
+<span class="nc" id="L113">		final SpimData2 dataGlobal = this.loadSpimData2();</span>
+
+<span class="nc bnc" id="L115" title="All 2 branches missed.">		if ( dataGlobal == null )</span>
+<span class="nc" id="L116">			return null;</span>
+
+<span class="nc bnc" id="L118" title="All 2 branches missed.">		if ( xmlOutURIString == null )</span>
+<span class="nc" id="L119">			xmlOutURIString = xmlURIString;</span>
+
+<span class="nc" id="L121">		xmlOutURI = URITools.toURI( xmlOutURIString );</span>
+<span class="nc" id="L122">		System.out.println( &quot;xmlout: &quot; + xmlOutURI );</span>
+
+		// process all views
+<span class="nc" id="L125">		final ArrayList&lt; ViewId &gt; viewIdsGlobal = Import.getViewIds( dataGlobal );</span>
+
+<span class="nc bnc" id="L127" title="All 2 branches missed.">		if ( viewIdsGlobal.size() == 0 )</span>
+		{
+<span class="nc" id="L129">			throw new IllegalArgumentException( &quot;No views to resave.&quot; );</span>
+		}
+		else
+		{
+<span class="nc" id="L133">			System.out.println( &quot;Following ViewIds will be resaved: &quot;);</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">			for ( final ViewId v : viewIdsGlobal )</span>
+<span class="nc" id="L135">				System.out.print( &quot;[&quot; + v.getTimePointId() + &quot;,&quot; + v.getViewSetupId() + &quot;] &quot; );</span>
+<span class="nc" id="L136">			System.out.println();</span>
+		}
+
+<span class="nc bnc" id="L139" title="All 4 branches missed.">		final URI n5PathURI = URITools.toURI( this.n5PathURIString == null ? URITools.appendName( URITools.getParentURI( xmlOutURI ), (useN5 ? &quot;dataset.n5&quot; : &quot;dataset.ome.zarr&quot;) ) : n5PathURIString );</span>
+<span class="nc" id="L140">		final Compression compression = N5Util.getCompression( this.compression, this.compressionLevel );</span>
+
+<span class="nc" id="L142">		final int[] blockSize = Import.csvStringToIntArray(blockSizeString);</span>
+<span class="nc" id="L143">		final int[] blockScale = Import.csvStringToIntArray(blockScaleString);</span>
+
+<span class="nc" id="L145">		final int[] computeBlockSize = new int[] {</span>
+				blockSize[0] * blockScale[ 0 ],
+				blockSize[1] * blockScale[ 1 ],
+				blockSize[2] * blockScale[ 2 ] };
+
+		//final N5Writer n5 = new N5FSWriter(n5Path);
+<span class="nc bnc" id="L151" title="All 2 branches missed.">		final N5Writer n5Writer = URITools.instantiateN5Writer( useN5 ? StorageFormat.N5 : StorageFormat.ZARR, n5PathURI );</span>
+
+<span class="nc" id="L153">		System.out.println( &quot;Compression: &quot; + this.compression );</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">		System.out.println( &quot;Compression level: &quot; + ( compressionLevel == null ? &quot;default&quot; : compressionLevel ) );</span>
+<span class="nc" id="L155">		System.out.println( &quot;N5 block size=&quot; + Util.printCoordinates( blockSize ) );</span>
+<span class="nc" id="L156">		System.out.println( &quot;Compute block size=&quot; + Util.printCoordinates( computeBlockSize ) );</span>
+<span class="nc" id="L157">		System.out.println( &quot;Setting up XML at: &quot; + xmlOutURI );</span>
+<span class="nc" id="L158">		System.out.println( &quot;Setting up N5 writing to basepath: &quot; + n5PathURI );</span>
+
+		// all ViewSetupIds (needed to create N5 datasets)
+<span class="nc" id="L161">		final HashMap&lt;Integer, long[]&gt; dimensions =</span>
+<span class="nc" id="L162">				N5ApiTools.assembleDimensions( dataGlobal, viewIdsGlobal );</span>
+
+		// all grids across all ViewId's
+<span class="nc" id="L165">		final List&lt;long[][]&gt; gridS0 =</span>
+<span class="nc" id="L166">				viewIdsGlobal.stream().map( viewId -&gt;</span>
+<span class="nc" id="L167">						N5ApiTools.assembleJobs(</span>
+								viewId,
+<span class="nc" id="L169">								dimensions.get( viewId.getViewSetupId() ),</span>
+								blockSize,
+<span class="nc" id="L171">								computeBlockSize ) ).flatMap(List::stream).collect( Collectors.toList() );</span>
+
+<span class="nc" id="L173">		final Map&lt;Integer, DataType&gt; dataTypes =</span>
+<span class="nc" id="L174">				N5ApiTools.assembleDataTypes( dataGlobal, dimensions.keySet() );</span>
+
+		// estimate or read downsampling factors
+		final int[][] downsamplings;
+
+<span class="nc bnc" id="L179" title="All 2 branches missed.">		if ( this.downsampling == null )</span>
+<span class="nc" id="L180">			downsamplings = N5ApiTools.mipMapInfoToDownsamplings( Resave_HDF5.proposeMipmaps( N5ApiTools.assembleViewSetups(dataGlobal, viewIdsGlobal) ) );</span>
+		else
+<span class="nc" id="L182">			downsamplings = Import.csvStringToDownsampling( this.downsampling );</span>
+
+<span class="nc bnc" id="L184" title="All 2 branches missed.">		if ( !Import.testFirstDownsamplingIsPresent( downsamplings ) )</span>
+<span class="nc" id="L185">			throw new RuntimeException( &quot;First downsampling step must be full resolution [1,1,...1], stopping.&quot; );</span>
+
+<span class="nc" id="L187">		System.out.println( &quot;Downsamplings: &quot; + Arrays.deepToString( downsamplings ) );</span>
+
+<span class="nc bnc" id="L189" title="All 2 branches missed.">		if ( dryRun )</span>
+		{
+<span class="nc" id="L191">			System.out.println( &quot;This is a dry-run, stopping here.&quot;);</span>
+<span class="nc" id="L192">			return null;</span>
+		}
+
+		// create all datasets and write BDV metadata for all ViewIds (including downsampling) in parallel
+<span class="nc" id="L196">		long time = System.currentTimeMillis();</span>
+
+		// TODO: is this map serializable?
+<span class="nc" id="L199">		final Map&lt; ViewId, MultiResolutionLevelInfo[] &gt; viewIdToMrInfo =</span>
+<span class="nc" id="L200">				viewIdsGlobal.parallelStream().map( viewId -&gt;</span>
+				{
+					final MultiResolutionLevelInfo[] mrInfo;
+
+<span class="nc bnc" id="L204" title="All 2 branches missed.">					if ( useN5 )</span>
+					{
+<span class="nc" id="L206">						mrInfo = N5ApiTools.setupBdvDatasetsN5(</span>
+								n5Writer,
+								viewId,
+<span class="nc" id="L209">								dataTypes.get( viewId.getViewSetupId() ),</span>
+<span class="nc" id="L210">								dimensions.get( viewId.getViewSetupId() ),</span>
+								compression,
+								blockSize,
+								downsamplings );
+					}
+					else
+					{
+<span class="nc" id="L217">						mrInfo = N5ApiTools.setupBdvDatasetsOMEZARR(</span>
+								n5Writer,
+								viewId,
+<span class="nc" id="L220">								dataTypes.get( viewId.getViewSetupId() ),</span>
+<span class="nc" id="L221">								dimensions.get( viewId.getViewSetupId() ),</span>
+<span class="nc" id="L222">								dataGlobal.getSequenceDescription().getViewDescription( viewId ).getViewSetup().getVoxelSize().dimensionsAsDoubleArray(),</span>
+								compression,
+								blockSize,
+								downsamplings);
+					}
+
+<span class="nc" id="L228">					return new ValuePair&lt;&gt;(</span>
+<span class="nc" id="L229">						new ViewId( viewId.getTimePointId(), viewId.getViewSetupId() ), // viewId is actually a ViewDescripton object, thus not serializable</span>
+						mrInfo );
+<span class="nc" id="L231">				}).collect(Collectors.toMap( e -&gt; e.getA(), e -&gt; e.getB() ));</span>
+
+<span class="nc" id="L233">		System.out.println( &quot;Created BDV-metadata, took &quot; + (System.currentTimeMillis() - time ) + &quot; ms.&quot; );</span>
+<span class="nc" id="L234">		System.out.println( &quot;Number of compute blocks = &quot; + gridS0.size() );</span>
+
+<span class="nc" id="L236">		final SparkConf conf = new SparkConf().setAppName(&quot;SparkResaveN5&quot;);</span>
+
+<span class="nc bnc" id="L238" title="All 2 branches missed.">		if ( localSparkBindAddress )</span>
+<span class="nc" id="L239">			conf.set(&quot;spark.driver.bindAddress&quot;, &quot;127.0.0.1&quot;);</span>
+
+<span class="nc" id="L241">		final JavaSparkContext sc = new JavaSparkContext(conf);</span>
+<span class="nc" id="L242">		sc.setLogLevel(&quot;ERROR&quot;);</span>
+
+		//
+		// Save s0 level
+		//
+<span class="nc" id="L247">		time = System.currentTimeMillis();</span>
+
+<span class="nc" id="L249">		final JavaRDD&lt;long[][]&gt; rdds0 = sc.parallelize( gridS0 ).repartition( Math.min( Spark.maxPartitions, gridS0.size() ) );</span>
+
+<span class="nc" id="L251">		rdds0.foreach(</span>
+				gridBlock -&gt;
+				{
+<span class="nc" id="L254">					final SpimData2 dataLocal = Spark.getSparkJobSpimData2(xmlURI);</span>
+<span class="nc bnc" id="L255" title="All 2 branches missed.">					final N5Writer n5Lcl = URITools.instantiateN5Writer( useN5 ? StorageFormat.N5 : StorageFormat.ZARR, n5PathURI );</span>
+
+<span class="nc bnc" id="L257" title="All 2 branches missed.">					N5ApiTools.resaveS0Block(</span>
+							dataLocal,
+							n5Lcl,
+							useN5 ? StorageFormat.N5 : StorageFormat.ZARR,
+<span class="nc bnc" id="L261" title="All 2 branches missed.">							dataTypes.get( N5ApiTools.gridBlockToViewId( gridBlock ).getViewSetupId() ),</span>
+<span class="nc" id="L262">							N5ApiTools.gridToDatasetBdv( 0, useN5 ? StorageFormat.N5 : StorageFormat.ZARR ), // a function mapping the gridblock to the dataset name for level 0 and N5</span>
+							gridBlock );
+
+<span class="nc" id="L265">					n5Lcl.close();</span>
+<span class="nc" id="L266">				});</span>
+
+<span class="nc bnc" id="L268" title="All 2 branches missed.">		System.out.println( &quot;Resaved &quot; + (useN5 ? &quot;N5 s0&quot; : &quot;OME-ZARR 0&quot;) + &quot;-level, took: &quot; + (System.currentTimeMillis() - time ) + &quot; ms.&quot; );</span>
+
+		//
+		// Save remaining downsampling levels (s1 ... sN)
+		//
+<span class="nc bnc" id="L273" title="All 2 branches missed.">		for ( int level = 1; level &lt; downsamplings.length; ++level )</span>
+		{
+<span class="nc" id="L275">			final int s = level;</span>
+
+<span class="nc" id="L277">			final List&lt;long[][]&gt; allBlocks =</span>
+<span class="nc" id="L278">					viewIdsGlobal.stream().map( viewId -&gt;</span>
+<span class="nc" id="L279">							N5ApiTools.assembleJobs(</span>
+									viewId,
+<span class="nc" id="L281">									viewIdToMrInfo.get(viewId)[s] )).flatMap(List::stream).collect( Collectors.toList() );</span>
+
+<span class="nc bnc" id="L283" title="All 2 branches missed.">			System.out.println( &quot;Downsampling level &quot; + (useN5 ? &quot;s&quot; : &quot;&quot;) + s + &quot;... &quot; );</span>
+<span class="nc" id="L284">			System.out.println( &quot;Number of compute blocks: &quot; + allBlocks.size() );</span>
+
+<span class="nc" id="L286">			final JavaRDD&lt;long[][]&gt; rddsN = sc.parallelize(allBlocks).repartition( Math.min( Spark.maxPartitions, allBlocks.size() ) );</span>
+
+<span class="nc" id="L288">			final long timeS = System.currentTimeMillis();</span>
+
+<span class="nc" id="L290">			rddsN.foreach(</span>
+					gridBlock -&gt;
+					{
+<span class="nc bnc" id="L293" title="All 2 branches missed.">						final N5Writer n5Lcl = URITools.instantiateN5Writer( useN5 ? StorageFormat.N5 : StorageFormat.ZARR, n5PathURI );</span>
+
+<span class="nc bnc" id="L295" title="All 2 branches missed.">						if ( useN5 )</span>
+						{
+<span class="nc" id="L297">							N5ApiTools.writeDownsampledBlock(</span>
+									n5Lcl,
+<span class="nc" id="L299">									viewIdToMrInfo.get( N5ApiTools.gridBlockToViewId( gridBlock ) )[ s ], //N5ResaveTools.gridToDatasetBdv( s, StorageType.N5 ),</span>
+<span class="nc" id="L300">									viewIdToMrInfo.get( N5ApiTools.gridBlockToViewId( gridBlock ) )[ s - 1 ],//N5ResaveTools.gridToDatasetBdv( s - 1, StorageType.N5 ),</span>
+									gridBlock );
+						}
+						else
+						{
+<span class="nc" id="L305">							N5ApiTools.writeDownsampledBlock5dOMEZARR(</span>
+									n5Lcl,
+<span class="nc" id="L307">									viewIdToMrInfo.get( N5ApiTools.gridBlockToViewId( gridBlock ) )[ s ], //N5ResaveTools.gridToDatasetBdv( s, StorageType.N5 ),</span>
+<span class="nc" id="L308">									viewIdToMrInfo.get( N5ApiTools.gridBlockToViewId( gridBlock ) )[ s - 1 ],//N5ResaveTools.gridToDatasetBdv( s - 1, StorageType.N5 ),</span>
+									gridBlock,
+									0,
+									0 );
+						}
+
+<span class="nc" id="L314">						n5Lcl.close();</span>
+<span class="nc" id="L315">					});</span>
+
+<span class="nc bnc" id="L317" title="All 2 branches missed.">			System.out.println( &quot;Resaved &quot; + (useN5 ? &quot;N5 s&quot; : &quot;OME-ZARR &quot;) + s + &quot; level, took: &quot; + (System.currentTimeMillis() - timeS ) + &quot; ms.&quot; );</span>
+		}
+
+<span class="nc" id="L320">		sc.close();</span>
+
+<span class="nc" id="L322">		System.out.println( &quot;resaved successfully.&quot; );</span>
+
+		// things look good, let's save the new XML
+<span class="nc" id="L325">		System.out.println( &quot;Saving new xml to: &quot; + xmlOutURI );</span>
+
+<span class="nc bnc" id="L327" title="All 4 branches missed.">		if ( useN5 &amp;&amp; URITools.isFile( n5PathURI ))</span>
+		{
+<span class="nc" id="L329">			dataGlobal.getSequenceDescription().setImgLoader(</span>
+<span class="nc" id="L330">					new N5ImageLoader( n5PathURI, dataGlobal.getSequenceDescription()));</span>
+		}
+<span class="nc bnc" id="L332" title="All 2 branches missed.">		else if ( useN5 )</span>
+		{
+<span class="nc" id="L334">			dataGlobal.getSequenceDescription().setImgLoader(</span>
+<span class="nc" id="L335">					new N5CloudImageLoader( null, n5PathURI, dataGlobal.getSequenceDescription())); // null is OK because the instance is not used now</span>
+		}
+		else
+		{
+<span class="nc" id="L339">			final Map&lt; ViewId, String &gt; viewIdToPath = new HashMap&lt;&gt;();</span>
+
+<span class="nc" id="L341">			viewIdToMrInfo.forEach( (viewId, mrInfo ) -&gt;</span>
+<span class="nc" id="L342">				viewIdToPath.put(</span>
+						viewId,
+<span class="nc" id="L344">						mrInfo[ 0 ].dataset.substring(0,  mrInfo[ 0 ].dataset.lastIndexOf( &quot;/&quot; ) ) )</span>
+			);
+
+<span class="nc" id="L347">			dataGlobal.getSequenceDescription().setImgLoader(</span>
+<span class="nc" id="L348">					new AllenOMEZarrLoader( n5PathURI, dataGlobal.getSequenceDescription(), viewIdToPath )); // null is OK because the instance is not used now</span>
+		}
+
+<span class="nc" id="L351">		new XmlIoSpimData2().save( dataGlobal, xmlOutURI );</span>
+
+<span class="nc" id="L353">		n5Writer.close();</span>
+
+<span class="nc" id="L355">		Thread.sleep( 100 );</span>
+<span class="nc" id="L356">		System.out.println( &quot;Resaved project, in total took: &quot; + (System.currentTimeMillis() - time ) + &quot; ms.&quot; );</span>
+<span class="nc" id="L357">		System.out.println( &quot;done.&quot; );</span>
+
+<span class="nc" id="L359">		return null;</span>
+	}
+
+	public static void main(final String... args) {
+
+<span class="nc" id="L364">		System.out.println(Arrays.toString(args));</span>
+
+<span class="nc" id="L366">		System.exit(new CommandLine(new SparkResaveN5()).execute(args));</span>
+<span class="nc" id="L367">	}</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

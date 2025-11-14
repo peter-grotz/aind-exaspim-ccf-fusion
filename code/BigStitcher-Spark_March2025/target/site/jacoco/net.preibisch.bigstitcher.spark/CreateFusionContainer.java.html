@@ -1,0 +1,512 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CreateFusionContainer.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark</a> &gt; <span class="el_source">CreateFusionContainer.java</span></div><h1>CreateFusionContainer.java</h1><pre class="source lang-java linenums">package net.preibisch.bigstitcher.spark;
+
+import java.io.File;
+import java.io.Serializable;
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.function.Function;
+
+import org.janelia.saalfeldlab.n5.Bzip2Compression;
+import org.janelia.saalfeldlab.n5.Compression;
+import org.janelia.saalfeldlab.n5.DataType;
+import org.janelia.saalfeldlab.n5.GzipCompression;
+import org.janelia.saalfeldlab.n5.Lz4Compression;
+import org.janelia.saalfeldlab.n5.N5Writer;
+import org.janelia.saalfeldlab.n5.RawCompression;
+import org.janelia.saalfeldlab.n5.XzCompression;
+import org.janelia.saalfeldlab.n5.blosc.BloscCompression;
+import org.janelia.saalfeldlab.n5.hdf5.N5HDF5Writer;
+import org.janelia.saalfeldlab.n5.universe.N5Factory.StorageFormat;
+import org.janelia.saalfeldlab.n5.universe.metadata.ome.ngff.v04.OmeNgffMultiScaleMetadata;
+import org.janelia.scicomp.n5.zstandard.ZstandardCompression;
+
+import bdv.util.MipmapTransforms;
+import mpicbg.spim.data.SpimDataException;
+import mpicbg.spim.data.sequence.Angle;
+import mpicbg.spim.data.sequence.Channel;
+import mpicbg.spim.data.sequence.FinalVoxelDimensions;
+import mpicbg.spim.data.sequence.Illumination;
+import mpicbg.spim.data.sequence.Tile;
+import mpicbg.spim.data.sequence.TimePoint;
+import mpicbg.spim.data.sequence.ViewDescription;
+import mpicbg.spim.data.sequence.ViewId;
+import mpicbg.spim.data.sequence.ViewSetup;
+import mpicbg.spim.data.sequence.VoxelDimensions;
+import net.imglib2.FinalDimensions;
+import net.imglib2.FinalInterval;
+import net.imglib2.realtransform.AffineTransform3D;
+import net.imglib2.util.Util;
+import net.preibisch.bigstitcher.spark.SparkAffineFusion.DataTypeFusion;
+import net.preibisch.bigstitcher.spark.abstractcmdline.AbstractBasic;
+import net.preibisch.bigstitcher.spark.util.Downsampling;
+import net.preibisch.bigstitcher.spark.util.Import;
+import net.preibisch.bigstitcher.spark.util.N5Util;
+import net.preibisch.legacy.io.IOFunctions;
+import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.XmlIoSpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.boundingbox.BoundingBox;
+import net.preibisch.mvrecon.fiji.spimdata.imgloaders.OMEZarrAttibutes;
+import net.preibisch.mvrecon.process.export.ExportN5Api;
+import net.preibisch.mvrecon.process.interestpointregistration.TransformationTools;
+import net.preibisch.mvrecon.process.n5api.N5ApiTools;
+import net.preibisch.mvrecon.process.n5api.N5ApiTools.MultiResolutionLevelInfo;
+import net.preibisch.mvrecon.process.n5api.SpimData2Tools;
+import picocli.CommandLine;
+import picocli.CommandLine.Option;
+import util.URITools;
+
+<span class="nc" id="L62">public class CreateFusionContainer extends AbstractBasic implements Callable&lt;Void&gt;, Serializable</span>
+{
+	private static final long serialVersionUID = -9140450542904228386L;
+
+<span class="nc" id="L66">	public static enum Compressions { Lz4, Gzip, Zstandard, Blosc, Bzip2, Xz, Raw };</span>
+
+<span class="nc" id="L68">	@Option(names = { &quot;-o&quot;, &quot;--outputPath&quot; }, required = true, description = &quot;OME-ZARR/N5/HDF5 path for saving, e.g. -o /home/fused.zarr, file:/home/fused.n5 or e.g. s3://myBucket/data.zarr&quot;)</span>
+	private String outputPathURIString = null;
+
+<span class="nc" id="L71">	@Option(names = {&quot;-s&quot;, &quot;--storage&quot;}, defaultValue = &quot;ZARR&quot;, showDefaultValue = CommandLine.Help.Visibility.ALWAYS,</span>
+			description = &quot;Dataset storage type, currently supported OME-ZARR, N5, and ONLY for local, multithreaded Spark HDF5 (default: OME-ZARR)&quot;)
+	private StorageFormat storageType = null;
+
+<span class="nc" id="L75">	@Option(names = {&quot;-c&quot;, &quot;--compression&quot;}, defaultValue = &quot;Zstandard&quot;, showDefaultValue = CommandLine.Help.Visibility.ALWAYS,</span>
+			description = &quot;Dataset compression&quot;)
+	private Compressions compression = null;
+
+<span class="nc" id="L79">	@Option(names = {&quot;-cl&quot;, &quot;--compressionLevel&quot; }, description = &quot;compression level, if supported by the codec (default: gzip 1, Zstandard 3, xz 6)&quot;)</span>
+	private Integer compressionLevel = null;
+
+<span class="nc" id="L82">	@Option(names = {&quot;-ch&quot;, &quot;--numChannels&quot; }, description = &quot;number of fused channels in the output container (default: as many as in the XML)&quot;)</span>
+	private Integer numChannels = null;
+
+<span class="nc" id="L85">	@Option(names = {&quot;-tp&quot;, &quot;--numTimepoints&quot; }, description = &quot;number of fused timepoints in the output container (default: as many as in the XML)&quot;)</span>
+	private Integer numTimepoints = null;
+
+<span class="nc" id="L88">	@Option(names = &quot;--blockSize&quot;, description = &quot;blockSize (default: 128,128,128)&quot;)</span>
+	private String blockSizeString = &quot;128,128,128&quot;;
+
+<span class="nc" id="L91">	@Option(names = {&quot;-d&quot;, &quot;--dataType&quot;}, defaultValue = &quot;FLOAT32&quot;, showDefaultValue = CommandLine.Help.Visibility.ALWAYS,</span>
+			description = &quot;Data type, UINT8 [0...255], UINT16 [0...65535] and FLOAT32 are supported, when choosing UINT8 or UINT16 you must define min and max intensity (default: FLOAT32)&quot;)
+	private DataTypeFusion dataTypeFusion = null;
+
+<span class="nc" id="L95">	@Option(names = { &quot;--minIntensity&quot; }, description = &quot;optionally adjust min intensity for scaling values to the desired range for UINT8 and UINT16 output, (default: 0)&quot;)</span>
+	private Double minIntensity = null;
+
+<span class="nc" id="L98">	@Option(names = { &quot;--maxIntensity&quot; }, description = &quot;optionally adjust max intensity for scaling values to the desired range for UINT8 and UINT16 output, (default: 255 for UINT8, 65535 for UINT16)&quot;)</span>
+	private Double maxIntensity = null;
+
+<span class="nc" id="L101">	@Option(names = { &quot;--bdv&quot; }, required = false, description = &quot;Write a BigDataViewer-compatible dataset (default: false)&quot;)</span>
+	private boolean bdv = false;
+
+<span class="nc" id="L104">	@Option(names = { &quot;-xo&quot;, &quot;--xmlout&quot; }, required = false, description = &quot;path to the new BigDataViewer xml project (only valid if --bdv was selected), &quot;</span>
+			+ &quot;e.g. -xo /home/project.xml or -xo s3://myBucket/project.xml (default: dataset.xml in basepath for H5, dataset.xml one directory level above basepath for N5)&quot;)
+	private String xmlOutURIString = null;
+
+<span class="nc" id="L108">	@Option(names = { &quot;-b&quot;, &quot;--boundingBox&quot; }, description = &quot;fuse a specific bounding box listed in the XML (default: fuse everything)&quot;)</span>
+	private String boundingBoxName = null;
+
+<span class="nc" id="L111">	@Option(names = { &quot;--multiRes&quot; }, description = &quot;Automatically create a multi-resolution pyramid (default: false)&quot;)</span>
+	private boolean multiRes = false;
+
+<span class="nc" id="L114">	@Option(names = { &quot;-ds&quot;, &quot;--downsampling&quot; }, split = &quot;;&quot;, required = false, description = &quot;Manually define steps to create a multi-resolution pyramid (e.g. -ds 1,1,1 -ds 2,2,1 -ds 4,4,2 -ds 8,8,4)&quot;)</span>
+	private List&lt;String&gt; downsampling = null;
+
+<span class="nc" id="L117">	@Option(names = { &quot;--preserveAnisotropy&quot; }, description = &quot;preserve the anisotropy of the data (default: false)&quot;)</span>
+	private boolean preserveAnisotropy = false;
+
+<span class="nc" id="L120">	@Option(names = { &quot;--anisotropyFactor&quot; }, description = &quot;define the anisotropy factor if preserveAnisotropy is set to true (default: compute from data)&quot;)</span>
+	private double anisotropyFactor = Double.NaN;
+
+<span class="nc" id="L123">	URI outPathURI = null, xmlOutURI = null;</span>
+
+	@Override
+	public Void call() throws Exception
+	{
+<span class="nc" id="L128">		this.setRegion();</span>
+
+<span class="nc bnc" id="L130" title="All 2 branches missed.">		if (dryRun)</span>
+		{
+<span class="nc" id="L132">			System.out.println( &quot;dry-run not supported for CreateFusionContainer.&quot;);</span>
+<span class="nc" id="L133">			System.exit( 0 );</span>
+		}
+
+<span class="nc bnc" id="L136" title="All 4 branches missed.">		if ( this.bdv &amp;&amp; xmlOutURIString == null )</span>
+		{
+<span class="nc" id="L138">			System.out.println( &quot;Please specify the output XML for the BDV dataset: -xo&quot;);</span>
+<span class="nc" id="L139">			return null;</span>
+		}
+
+<span class="nc" id="L142">		this.outPathURI =  URITools.toURI( outputPathURIString );</span>
+<span class="nc" id="L143">		System.out.println( &quot;ZARR/N5/HDF5 container: &quot; + outPathURI );</span>
+
+<span class="nc bnc" id="L145" title="All 4 branches missed.">		if ( storageType == StorageFormat.HDF5 &amp;&amp; URITools.isFile( outPathURI ) )</span>
+		{
+<span class="nc" id="L147">			System.out.println( &quot;HDF5 only supports local storage, but --outputPath=&quot; + outPathURI );</span>
+<span class="nc" id="L148">			return null;</span>
+		}
+
+<span class="nc" id="L151">		final SpimData2 dataGlobal = this.loadSpimData2();</span>
+
+<span class="nc bnc" id="L153" title="All 2 branches missed.">		if ( dataGlobal == null )</span>
+<span class="nc" id="L154">			return null;</span>
+
+<span class="nc" id="L156">		final ArrayList&lt; ViewId &gt; viewIdsGlobal = Import.getViewIds( dataGlobal );</span>
+
+<span class="nc bnc" id="L158" title="All 4 branches missed.">		if ( viewIdsGlobal == null || viewIdsGlobal.size() == 0 )</span>
+<span class="nc" id="L159">			return null;</span>
+
+<span class="nc" id="L161">		final int numTimepointsXML = dataGlobal.getSequenceDescription().getTimePoints().getTimePointsOrdered().size();</span>
+<span class="nc" id="L162">		final int numChannelsXML = dataGlobal.getSequenceDescription().getAllChannelsOrdered().size();</span>
+
+<span class="nc" id="L164">		System.out.println( &quot;XML project contains &quot; + numChannelsXML + &quot; channels, &quot; + numTimepointsXML + &quot; timepoints.&quot; );</span>
+
+<span class="nc bnc" id="L166" title="All 2 branches missed.">		if ( numChannels == null )</span>
+<span class="nc" id="L167">			numChannels = numChannelsXML;</span>
+
+<span class="nc bnc" id="L169" title="All 2 branches missed.">		if ( numTimepoints == null )</span>
+<span class="nc" id="L170">			numTimepoints = numTimepointsXML;</span>
+
+<span class="nc bnc" id="L172" title="All 2 branches missed.">		if ( numChannels &lt; numChannelsXML )</span>
+<span class="nc" id="L173">			System.out.println( &quot;WARNING: you selected to fuse LESS channels than present in the data. This works, but you will need specify the content manually.&quot;);</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">		else if ( numChannels &gt; numChannelsXML )</span>
+<span class="nc" id="L175">			System.out.println( &quot;WARNING: you selected to fuse MORE channels than present in the data. This works, but you will need specify the content manually.&quot;);</span>
+
+<span class="nc bnc" id="L177" title="All 2 branches missed.">		if ( numTimepoints &lt; numTimepointsXML )</span>
+<span class="nc" id="L178">			System.out.println( &quot;WARNING: you selected to fuse LESS timepoints than present in the data. This works, but you will need specify the content manually.&quot;);</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">		else if ( numTimepoints &gt; numTimepointsXML )</span>
+<span class="nc" id="L180">			System.out.println( &quot;WARNING: you selected to fuse MORE timepoints than present in the data. This works, but you will need specify the content manually.&quot;);</span>
+
+<span class="nc bnc" id="L182" title="All 2 branches missed.">		if ( this.bdv )</span>
+		{
+<span class="nc" id="L184">			this.xmlOutURI = URITools.toURI( xmlOutURIString );</span>
+<span class="nc" id="L185">			System.out.println( &quot;XML: &quot; + xmlOutURI );</span>
+
+<span class="nc bnc" id="L187" title="All 2 branches missed.">			if ( storageType == StorageFormat.ZARR )</span>
+			{
+<span class="nc" id="L189">				System.out.println( &quot;BDV project for OME-ZARR not yet supported (but very soon!)&quot; );</span>
+<span class="nc" id="L190">				return null;</span>
+			}
+		}
+
+<span class="nc" id="L194">		BoundingBox boundingBox = Import.getBoundingBox( dataGlobal, viewIdsGlobal, boundingBoxName );</span>
+
+<span class="nc" id="L196">		final long[] minBB = boundingBox.minAsLongArray();</span>
+<span class="nc" id="L197">		final long[] maxBB = boundingBox.maxAsLongArray();</span>
+
+<span class="nc bnc" id="L199" title="All 2 branches missed.">		if ( preserveAnisotropy )</span>
+		{
+<span class="nc" id="L201">			System.out.println( &quot;Preserving anisotropy.&quot;);</span>
+
+<span class="nc bnc" id="L203" title="All 2 branches missed.">			if ( Double.isNaN( anisotropyFactor ) )</span>
+			{
+<span class="nc" id="L205">				anisotropyFactor = TransformationTools.getAverageAnisotropyFactor( dataGlobal, viewIdsGlobal );</span>
+
+<span class="nc" id="L207">				System.out.println( &quot;Anisotropy factor [computed from data]: &quot; + anisotropyFactor );</span>
+			}
+			else
+			{
+<span class="nc" id="L211">				System.out.println( &quot;Anisotropy factor [provided]: &quot; + anisotropyFactor );</span>
+			}
+
+			// prepare downsampled boundingbox
+<span class="nc" id="L215">			minBB[ 2 ] = Math.round( Math.floor( minBB[ 2 ] / anisotropyFactor ) );</span>
+<span class="nc" id="L216">			maxBB[ 2 ] = Math.round( Math.ceil( maxBB[ 2 ] / anisotropyFactor ) );</span>
+
+<span class="nc" id="L218">			boundingBox = new BoundingBox( new FinalInterval(minBB, maxBB) );</span>
+
+<span class="nc" id="L220">			System.out.println( &quot;Adjusted bounding box (anisotropy preserved): &quot; + Util.printInterval( boundingBox ) );</span>
+		}
+
+<span class="nc" id="L223">		final int[] blockSize = Import.csvStringToIntArray( blockSizeString );</span>
+
+<span class="nc" id="L225">		System.out.println( &quot;Fusion target: &quot; + boundingBox.getTitle() + &quot;: &quot; + Util.printInterval( boundingBox ) + &quot; with blocksize &quot; + Util.printCoordinates( blockSize ) );</span>
+
+		// compression and data type
+<span class="nc" id="L228">		final Compression compression = N5Util.getCompression( this.compression, this.compressionLevel );</span>
+
+<span class="nc" id="L230">		System.out.println( &quot;Compression: &quot; + this.compression );</span>
+<span class="nc bnc" id="L231" title="All 2 branches missed.">		System.out.println( &quot;Compression level: &quot; + ( compressionLevel == null ? &quot;default&quot; : compressionLevel ) );</span>
+
+		final DataType dt;
+		Double minIntensity, maxIntensity;
+
+<span class="nc bnc" id="L236" title="All 2 branches missed.">		if ( dataTypeFusion == DataTypeFusion.UINT8 )</span>
+		{
+<span class="nc" id="L238">			dt = DataType.UINT8;</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">			minIntensity = (this.minIntensity == null) ? 0 : this.minIntensity;</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">			maxIntensity = (this.maxIntensity == null) ? 255 : this.maxIntensity;</span>
+		}
+<span class="nc bnc" id="L242" title="All 2 branches missed.">		else if ( dataTypeFusion == DataTypeFusion.UINT16 )</span>
+		{
+<span class="nc" id="L244">			dt = DataType.UINT16;</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">			minIntensity = (this.minIntensity == null) ? 0 : this.minIntensity;</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">			maxIntensity = (this.maxIntensity == null) ? 65535 : this.maxIntensity;</span>
+		}
+<span class="nc bnc" id="L248" title="All 2 branches missed.">		else if ( dataTypeFusion == DataTypeFusion.FLOAT32 )</span>
+		{
+<span class="nc" id="L250">			dt = DataType.FLOAT32;</span>
+<span class="nc" id="L251">			minIntensity = maxIntensity = null;</span>
+		}
+		else
+		{
+<span class="nc" id="L255">			dt = null;</span>
+<span class="nc" id="L256">			minIntensity = maxIntensity = null;</span>
+		}
+
+<span class="nc" id="L259">		System.out.println( &quot;Data type: &quot; + dt );</span>
+
+<span class="nc bnc" id="L261" title="All 4 branches missed.">		if ( dt == null || compression == null )</span>
+<span class="nc" id="L262">			return null;</span>
+
+		//
+		// set up downsampling
+		//
+<span class="nc bnc" id="L267" title="All 2 branches missed.">		if ( !Downsampling.testDownsamplingParameters( this.multiRes, this.downsampling ) )</span>
+<span class="nc" id="L268">			return null;</span>
+
+		final int[][] downsamplings;
+
+<span class="nc bnc" id="L272" title="All 2 branches missed.">		if ( multiRes )</span>
+<span class="nc" id="L273">			downsamplings = ExportN5Api.estimateMultiResPyramid( new FinalDimensions( boundingBox ), anisotropyFactor );</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">		else if ( this.downsampling != null )</span>
+<span class="nc" id="L275">			downsamplings = Import.csvStringListToDownsampling( this.downsampling );</span>
+		else
+<span class="nc" id="L277">			downsamplings = new int[][]{{ 1, 1, 1 }};</span>
+
+<span class="nc bnc" id="L279" title="All 2 branches missed.">		if ( downsamplings == null )</span>
+<span class="nc" id="L280">			return null;</span>
+
+<span class="nc" id="L282">		System.out.println( &quot;The following downsampling pyramid will be created:&quot; );</span>
+<span class="nc" id="L283">		System.out.println( Arrays.deepToString( downsamplings ) );</span>
+
+		//
+		// set up container and metadata
+		//
+		final N5Writer driverVolumeWriter;
+		//MultiResolutionLevelInfo[] mrInfo;
+
+<span class="nc" id="L291">		System.out.println();</span>
+<span class="nc" id="L292">		System.out.println( &quot;Setting up container and metadata in '&quot; + outPathURI + &quot;' ... &quot; );</span>
+
+		// init base folder and writer
+<span class="nc bnc" id="L295" title="All 2 branches missed.">		if ( storageType == StorageFormat.HDF5 )</span>
+		{
+<span class="nc" id="L297">			final File dir = new File( URITools.fromURI( outPathURI ) ).getParentFile();</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">			if ( !dir.exists() )</span>
+<span class="nc" id="L299">				dir.mkdirs();</span>
+<span class="nc" id="L300">			driverVolumeWriter = new N5HDF5Writer( URITools.fromURI( outPathURI ) );</span>
+<span class="nc" id="L301">		}</span>
+<span class="nc bnc" id="L302" title="All 4 branches missed.">		else if ( storageType == StorageFormat.N5 || storageType == StorageFormat.ZARR )</span>
+		{
+<span class="nc" id="L304">			driverVolumeWriter = URITools.instantiateN5Writer( storageType, outPathURI );</span>
+		}
+		else
+		{
+<span class="nc" id="L308">			System.out.println( &quot;Unsupported format: &quot; + storageType );</span>
+<span class="nc" id="L309">			return null;</span>
+			
+		}
+
+<span class="nc" id="L313">		driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/InputXML&quot;, xmlURI );</span>
+
+<span class="nc" id="L315">		driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/NumTimepoints&quot;, numTimepoints );</span>
+<span class="nc" id="L316">		driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/NumChannels&quot;, numChannels );</span>
+
+<span class="nc" id="L318">		driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/Boundingbox_min&quot;, boundingBox.minAsLongArray() );</span>
+<span class="nc" id="L319">		driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/Boundingbox_max&quot;, boundingBox.maxAsLongArray() );</span>
+
+<span class="nc" id="L321">		driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/PreserveAnisotropy&quot;, preserveAnisotropy );</span>
+<span class="nc" id="L322">		driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/AnisotropyFactor&quot;, anisotropyFactor );</span>
+<span class="nc" id="L323">		driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/DataType&quot;, dt );</span>
+<span class="nc" id="L324">		driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/BlockSize&quot;, blockSize );</span>
+
+<span class="nc bnc" id="L326" title="All 4 branches missed.">		if ( minIntensity != null &amp;&amp; maxIntensity != null )</span>
+		{
+<span class="nc" id="L328">			driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/MinIntensity&quot;, minIntensity );</span>
+<span class="nc" id="L329">			driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/MaxIntensity&quot;, maxIntensity );</span>
+		}
+
+		// setup datasets and metadata
+		MultiResolutionLevelInfo[][] mrInfos;
+
+<span class="nc bnc" id="L335" title="All 2 branches missed.">		if ( bdv )</span>
+		{
+<span class="nc" id="L337">			System.out.println( &quot;Creating BDV compatible container at '&quot; + outPathURI + &quot;' ... &quot; );</span>
+
+<span class="nc bnc" id="L339" title="All 2 branches missed.">			if ( storageType == StorageFormat.N5 )</span>
+<span class="nc" id="L340">				driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/FusionFormat&quot;, &quot;BDV/N5&quot; );</span>
+			else
+<span class="nc" id="L342">				driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/FusionFormat&quot;, &quot;BDV/HDF5&quot; );</span>
+
+<span class="nc" id="L344">			driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/OutputXML&quot;, xmlOutURI );</span>
+
+<span class="nc" id="L346">			final long[] bb = boundingBox.dimensionsAsLongArray();</span>
+
+<span class="nc" id="L348">			final ArrayList&lt; ViewSetup &gt; setups = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L349">			final ArrayList&lt; TimePoint &gt; tps = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L351" title="All 2 branches missed.">			for ( int t = 0; t &lt; numTimepoints; ++t )</span>
+<span class="nc" id="L352">				tps.add( new TimePoint( t ) );</span>
+
+			// extract the resolution of the s0 export
+			// TODO: this is inaccurate, we should actually estimate it from the final transformn that is applied
+<span class="nc" id="L356">			final VoxelDimensions vx = dataGlobal.getSequenceDescription().getViewSetupsOrdered().iterator().next().getVoxelSize();</span>
+<span class="nc" id="L357">			final double[] resolutionS0 = OMEZarrAttibutes.getResolutionS0( vx, anisotropyFactor, Double.NaN );</span>
+
+<span class="nc" id="L359">			System.out.println( &quot;Resolution of level 0: &quot; + Util.printCoordinates( resolutionS0 ) + &quot; &quot; + &quot;m&quot; ); //vx.unit() might not be OME-ZARR compatiblevx.unit() );</span>
+
+<span class="nc" id="L361">			final VoxelDimensions vxNew = new FinalVoxelDimensions( &quot;micrometer&quot;, resolutionS0 );</span>
+
+<span class="nc bnc" id="L363" title="All 2 branches missed.">			for ( int c = 0; c &lt; numChannels; ++c )</span>
+			{
+<span class="nc" id="L365">				setups.add(</span>
+						new ViewSetup(
+								c,
+								&quot;setup &quot; + c,
+								new FinalDimensions( bb ),
+								vxNew,
+								new Tile( 0 ),
+								new Channel( c, &quot;Channel &quot; + c ),
+								new Angle( 0 ),
+								new Illumination( 0 ) ) );
+			}
+
+<span class="nc" id="L377">			final SpimData2 dataFusion =</span>
+<span class="nc" id="L378">					SpimData2Tools.createNewSpimDataForFusion( storageType, outPathURI, xmlOutURI, setups, tps );</span>
+
+<span class="nc" id="L380">			new XmlIoSpimData2().save( dataFusion, xmlOutURI );</span>
+
+<span class="nc" id="L382">			final Collection&lt;ViewDescription&gt; vds = dataFusion.getSequenceDescription().getViewDescriptions().values();</span>
+
+<span class="nc" id="L384">			mrInfos = new MultiResolutionLevelInfo[ vds.size() ][];</span>
+
+<span class="nc" id="L386">			vds.stream().parallel().forEach( vd -&gt;</span>
+			{
+<span class="nc" id="L388">				final int c = vd.getViewSetup().getChannel().getId();</span>
+<span class="nc" id="L389">				final int t = vd.getTimePointId();</span>
+
+<span class="nc bnc" id="L391" title="All 2 branches missed.">				if ( storageType == StorageFormat.N5 )</span>
+				{
+<span class="nc" id="L393">					mrInfos[ c + t*c  ] = N5ApiTools.setupBdvDatasetsN5(</span>
+							driverVolumeWriter, vd, dt, bb, compression, blockSize, downsamplings);
+
+<span class="nc" id="L396">					driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/FusionFormat&quot;, &quot;BDV/N5&quot; );</span>
+				}
+				else // HDF5
+				{
+<span class="nc" id="L400">					mrInfos[ c + t*numChannels  ] = N5ApiTools.setupBdvDatasetsHDF5(</span>
+							driverVolumeWriter, vd, dt, bb, compression, blockSize, downsamplings);
+				}
+<span class="nc" id="L403">			});</span>
+
+			// TODO: set extra attributes to load the state
+<span class="nc" id="L406">		}</span>
+<span class="nc bnc" id="L407" title="All 2 branches missed.">		else if ( storageType == StorageFormat.ZARR ) // OME-Zarr export</span>
+		{
+<span class="nc" id="L409">			System.out.println( &quot;Creating 5D OME-ZARR metadata for '&quot; + outPathURI + &quot;' ... &quot; );</span>
+
+<span class="nc" id="L411">			driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/FusionFormat&quot;, &quot;OME-ZARR&quot; );</span>
+
+<span class="nc" id="L413">			final long[] dim3d = boundingBox.dimensionsAsLongArray();</span>
+
+<span class="nc" id="L415">			final long[] dim = new long[] { dim3d[ 0 ], dim3d[ 1 ], dim3d[ 2 ], numChannels, numTimepoints };</span>
+<span class="nc" id="L416">			final int[] blockSize5d = new int[] { blockSize[ 0 ], blockSize[ 1 ], blockSize[ 2 ], 1, 1 };</span>
+<span class="nc" id="L417">			final int[][] ds = new int[ downsamplings.length ][];</span>
+<span class="nc bnc" id="L418" title="All 2 branches missed.">			for ( int d = 0; d &lt; ds.length; ++d )</span>
+<span class="nc" id="L419">				ds[ d ] = new int[] { downsamplings[ d ][ 0 ], downsamplings[ d ][ 1 ], downsamplings[ d ][ 2 ], 1, 1 };</span>
+
+<span class="nc" id="L421">			final Function&lt;Integer, String&gt; levelToName = (level) -&gt; &quot;/&quot; + level;</span>
+
+<span class="nc" id="L423">			mrInfos = new MultiResolutionLevelInfo[ 1 ][];</span>
+
+			// all is 5d now
+<span class="nc" id="L426">			mrInfos[ 0 ] = N5ApiTools.setupMultiResolutionPyramid(</span>
+					driverVolumeWriter,
+					levelToName,
+					dt,
+					dim, //5d
+					compression,
+					blockSize5d, //5d
+					ds ); // 5d
+
+<span class="nc" id="L435">			final Function&lt;Integer, AffineTransform3D&gt; levelToMipmapTransform =</span>
+<span class="nc" id="L436">					(level) -&gt; MipmapTransforms.getMipmapTransformDefault( mrInfos[ 0 ][level].absoluteDownsamplingDouble() );</span>
+
+			// extract the resolution of the s0 export
+			// TODO: this is inaccurate, we should actually estimate it from the final transformn that is applied
+<span class="nc" id="L440">			final VoxelDimensions vx = dataGlobal.getSequenceDescription().getViewSetupsOrdered().iterator().next().getVoxelSize();</span>
+<span class="nc" id="L441">			final double[] resolutionS0 = OMEZarrAttibutes.getResolutionS0( vx, anisotropyFactor, Double.NaN );</span>
+
+<span class="nc" id="L443">			System.out.println( &quot;Resolution of level 0: &quot; + Util.printCoordinates( resolutionS0 ) + &quot; &quot; + &quot;micrometer&quot; ); //vx.unit() might not be OME-ZARR compatiblevx.unit() );</span>
+
+			// create metadata
+<span class="nc" id="L446">			final OmeNgffMultiScaleMetadata[] meta = OMEZarrAttibutes.createOMEZarrMetadata(</span>
+					5, // int n
+					&quot;/&quot;, // String name, I also saw &quot;/&quot;
+					resolutionS0, // double[] resolutionS0,
+					&quot;micrometer&quot;, //vx.unit() might not be OME-ZARR compatible // String unitXYZ, // e.g micrometer
+					mrInfos[ 0 ].length, // int numResolutionLevels,
+					levelToName,
+					levelToMipmapTransform );
+
+			// save metadata
+
+			//org.janelia.saalfeldlab.n5.universe.metadata.ome.ngff.v04.OmeNgffMetadata
+			// for this to work you need to register an adapter in the N5Factory class
+			// final GsonBuilder builder = new GsonBuilder().registerTypeAdapter( CoordinateTransformation.class, new CoordinateTransformationAdapter() );
+<span class="nc" id="L460">			driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;multiscales&quot;, meta );</span>
+<span class="nc" id="L461">		}</span>
+		else // simple (no bdv project) HDF5/N5 export
+		{
+<span class="nc" id="L464">			mrInfos = new MultiResolutionLevelInfo[ numChannels * numTimepoints ][];</span>
+
+<span class="nc bnc" id="L466" title="All 2 branches missed.">			if ( storageType == StorageFormat.N5 )</span>
+<span class="nc" id="L467">				driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/FusionFormat&quot;, &quot;N5&quot; );</span>
+			else
+<span class="nc" id="L469">				driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/FusionFormat&quot;, &quot;HDF5&quot; );</span>
+
+<span class="nc bnc" id="L471" title="All 2 branches missed.">			for ( int c = 0; c &lt; numChannels; ++c )</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">				for ( int t = 0; t &lt; numTimepoints; ++t )</span>
+				{
+<span class="nc" id="L474">					String title = &quot;ch&quot;+c+&quot;tp&quot;+t;</span>
+
+<span class="nc" id="L476">					IOFunctions.println( &quot;Creating 3D &quot; + storageType +&quot; container '&quot; + title + &quot;' in '&quot; + outPathURI + &quot;' ... &quot; );</span>
+		
+					// setup multi-resolution pyramid
+<span class="nc" id="L479">					mrInfos[ c + t*numChannels  ] = N5ApiTools.setupMultiResolutionPyramid(</span>
+							driverVolumeWriter,
+<span class="nc" id="L481">							(level) -&gt; title + &quot;/s&quot; + level,</span>
+							dt,
+<span class="nc" id="L483">							boundingBox.dimensionsAsLongArray(),</span>
+							compression,
+							blockSize,
+							downsamplings );
+				}
+		}
+
+
+		// TODO: set extra attributes to load the state
+<span class="nc" id="L492">		driverVolumeWriter.setAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/MultiResolutionInfos&quot;, mrInfos );</span>
+
+<span class="nc" id="L494">		driverVolumeWriter.close();</span>
+
+<span class="nc" id="L496">		return null;</span>
+	}
+
+	public static void main(final String... args) throws SpimDataException
+	{
+
+		//final XmlIoSpimData io = new XmlIoSpimData();
+		//final SpimData spimData = io.load( &quot;/Users/preibischs/Documents/Microscopy/Stitching/Truman/standard/output/dataset.xml&quot; );
+		//BdvFunctions.show( spimData );
+		//SimpleMultiThreading.threadHaltUnClean();
+
+<span class="nc" id="L507">		System.out.println(Arrays.toString(args));</span>
+
+<span class="nc" id="L509">		System.exit(new CommandLine(new CreateFusionContainer()).execute(args));</span>
+<span class="nc" id="L510">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

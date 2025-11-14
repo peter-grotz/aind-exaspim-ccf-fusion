@@ -1,0 +1,972 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SparkInterestPointDetection.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark</a> &gt; <span class="el_source">SparkInterestPointDetection.java</span></div><h1>SparkInterestPointDetection.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark;
+
+import java.io.Serializable;
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
+import java.util.stream.DoubleStream;
+
+import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.janelia.saalfeldlab.n5.DataType;
+import org.janelia.saalfeldlab.n5.GzipCompression;
+import org.janelia.saalfeldlab.n5.N5Writer;
+import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
+import org.janelia.saalfeldlab.n5.universe.N5Factory.StorageFormat;
+
+import mpicbg.spim.data.generic.sequence.BasicImgLoader;
+import mpicbg.spim.data.registration.ViewRegistration;
+import mpicbg.spim.data.sequence.ImgLoader;
+import mpicbg.spim.data.sequence.MultiResolutionImgLoader;
+import mpicbg.spim.data.sequence.ViewDescription;
+import mpicbg.spim.data.sequence.ViewId;
+import net.imglib2.Dimensions;
+import net.imglib2.FinalInterval;
+import net.imglib2.Interval;
+import net.imglib2.KDTree;
+import net.imglib2.RandomAccessible;
+import net.imglib2.RandomAccessibleInterval;
+import net.imglib2.RealRandomAccess;
+import net.imglib2.RealRandomAccessible;
+import net.imglib2.algorithm.gauss3.Gauss3;
+import net.imglib2.converter.Converters;
+import net.imglib2.interpolation.randomaccess.NLinearInterpolatorFactory;
+import net.imglib2.neighborsearch.NearestNeighborSearchOnKDTree;
+import net.imglib2.position.FunctionRandomAccessible;
+import net.imglib2.realtransform.AffineTransform3D;
+import net.imglib2.type.numeric.RealType;
+import net.imglib2.type.numeric.real.FloatType;
+import net.imglib2.util.Intervals;
+import net.imglib2.util.Pair;
+import net.imglib2.util.Util;
+import net.imglib2.util.ValuePair;
+import net.imglib2.view.Views;
+import net.preibisch.bigstitcher.spark.abstractcmdline.AbstractSelectableViews;
+import net.preibisch.bigstitcher.spark.detection.LazyBackgroundSubtract;
+import net.preibisch.bigstitcher.spark.fusion.OverlappingViews;
+import net.preibisch.bigstitcher.spark.util.Import;
+import net.preibisch.bigstitcher.spark.util.Spark;
+import net.preibisch.bigstitcher.spark.util.ViewUtil;
+import net.preibisch.bigstitcher.spark.util.ViewUtil.PrefetchPixel;
+import net.preibisch.legacy.io.IOFunctions;
+import net.preibisch.mvrecon.Threads;
+import net.preibisch.mvrecon.fiji.plugin.interestpointdetection.DifferenceOfGUI;
+import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.XmlIoSpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.interestpoints.CorrespondingInterestPoints;
+import net.preibisch.mvrecon.fiji.spimdata.interestpoints.InterestPoint;
+import net.preibisch.mvrecon.fiji.spimdata.interestpoints.InterestPoints;
+import net.preibisch.mvrecon.fiji.spimdata.interestpoints.InterestPointsN5;
+import net.preibisch.mvrecon.process.downsampling.Downsample;
+import net.preibisch.mvrecon.process.downsampling.DownsampleTools;
+import net.preibisch.mvrecon.process.downsampling.lazy.LazyDownsample2x;
+import net.preibisch.mvrecon.process.interestpointdetection.InterestPointTools;
+import net.preibisch.mvrecon.process.interestpointdetection.methods.dog.DoGImgLib2;
+import net.preibisch.mvrecon.process.interestpointdetection.methods.dog.DoGParameters;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.grouping.Group;
+import picocli.CommandLine;
+import picocli.CommandLine.Option;
+import scala.Tuple3;
+import scala.Tuple4;
+import util.Grid;
+import util.URITools;
+
+<span class="nc" id="L103">public class SparkInterestPointDetection extends AbstractSelectableViews implements Callable&lt;Void&gt;, Serializable</span>
+{
+	private static final long serialVersionUID = -7654397945854689628L;
+
+<span class="nc" id="L107">	public static double combineDistance = 0.5; // when to merge interestpoints that were found in overlapping ROIS (overlappingOnly)</span>
+
+<span class="nc" id="L109">	public enum IP { MIN, MAX, BOTH };</span>
+<span class="nc" id="L110">	public enum Localization { NONE, QUADRATIC };</span>
+
+<span class="nc" id="L112">	@Option(names = { &quot;-l&quot;, &quot;--label&quot; }, required = true, description = &quot;label for the interest points (e.g. beads)&quot;)</span>
+	protected String label = null;
+
+<span class="nc" id="L115">	@Option(names = { &quot;-s&quot;, &quot;--sigma&quot; }, required = true, description = &quot;sigma for segmentation, e.g. 1.8&quot;)</span>
+	protected Double sigma = null;
+
+<span class="nc" id="L118">	@Option(names = { &quot;-t&quot;, &quot;--threshold&quot; }, required = true, description = &quot;threshold for segmentation, e.g. 0.008&quot;)</span>
+	protected Double threshold = null;
+
+<span class="nc" id="L121">	@Option(names = { &quot;--type&quot; }, description = &quot;the type of interestpoints to find, MIN, MAX or BOTH (default: MAX)&quot;)</span>
+	protected IP type = IP.MAX;
+
+<span class="nc" id="L124">	@Option(names = { &quot;--localization&quot; }, description = &quot;Subpixel localization method, NONE or QUADRATIC (default: QUADRATIC)&quot;)</span>
+	protected Localization localization = Localization.QUADRATIC;
+
+<span class="nc" id="L127">	@Option(names = { &quot;--overlappingOnly&quot; }, description = &quot;only find interest points in areas that currently overlap with another view (default: false)&quot;)</span>
+	protected boolean overlappingOnly = false;
+
+<span class="nc" id="L130">	@Option(names = { &quot;--storeIntensities&quot; }, description = &quot;creates an additional N5 dataset with the intensities of each detection, linearly interpolated (default: false)&quot;)</span>
+	protected boolean storeIntensities = false;
+
+<span class="nc" id="L133">	@Option(names = { &quot;-i0&quot;, &quot;--minIntensity&quot; }, required = true, description = &quot;min intensity for segmentation, e.g. 0.0&quot;)</span>
+	protected Double minIntensity = null;
+
+<span class="nc" id="L136">	@Option(names = { &quot;-i1&quot;, &quot;--maxIntensity&quot; }, required = true, description = &quot;max intensity for segmentation, e.g. 2048.0&quot;)</span>
+	protected Double maxIntensity = null;
+
+<span class="nc" id="L139">	@Option(names = { &quot;--prefetch&quot; }, description = &quot;prefetch all blocks required to process DoG in each Spark job using unlimited threads, useful in cloud environments (default: false)&quot;)</span>
+	protected boolean prefetch = false;
+
+
+<span class="nc" id="L143">	@Option(names = {&quot;--maxSpots&quot; }, description = &quot;limit the number of spots per view (choose the brightest ones), e.g. --maxSpots 10000 (default: NO LIMIT)&quot;)</span>
+	protected int maxSpots = -1;
+
+<span class="nc" id="L146">	@Option(names = { &quot;--maxSpotsPerOverlap&quot; }, description = &quot;apply the maximum number of spots individually to every overlapping area, needs --overlappingOnly &amp; --maxSpots to be set to work (default: false)&quot;)</span>
+	protected boolean maxSpotsPerOverlap = false;
+
+<span class="nc" id="L149">	@Option(names = &quot;--blockSize&quot;, description = &quot;blockSize for running the interest point detection - at the scale of detection (default: 512,512,128)&quot;)</span>
+	protected String blockSizeString = &quot;512,512,128&quot;;
+
+<span class="nc" id="L152">	@Option(names = { &quot;--medianFilter&quot; }, description = &quot;divide by the median filtered image of the given radius prior to interest point detection, e.g. --medianFilter 10&quot;)</span>
+	protected Integer medianFilter = null;
+
+
+<span class="nc" id="L156">	@Option(names = { &quot;-dsxy&quot;, &quot;--downsampleXY&quot; }, description = &quot;downsampling in XY to use for segmentation, e.g. 4 (default: 2)&quot;)</span>
+<span class="nc" id="L157">	protected Integer dsxy = 2;</span>
+
+<span class="nc" id="L159">	@Option(names = { &quot;-dsz&quot;, &quot;--downsampleZ&quot; }, description = &quot;downsampling in Z to use for segmentation, e.g. 2 (default: 1)&quot;)</span>
+<span class="nc" id="L160">	protected Integer dsz = 1;</span>
+
+	//-x /Users/preibischs/SparkTest/IP/dataset.xml -l beadsTest500 -s 1.8 -t 0.008 -dsxy 2 --minIntensity 0 --maxIntensity 255 --prefetch
+	//-x /Users/preibischs/Downloads/dataset-allen.xml -l beadsTest500 -vi '0,0' -s 1.8 -t 0.008 -dsxy 32 -dsz 32 --minIntensity 0 --maxIntensity 255 --prefetch
+
+	@Override
+	public Void call() throws Exception
+	{
+<span class="nc" id="L168">		this.setRegion();</span>
+
+<span class="nc bnc" id="L170" title="All 6 branches missed.">		if ( maxSpotsPerOverlap &amp;&amp; ( !overlappingOnly || maxSpots &lt;= 0 ) )</span>
+		{
+<span class="nc" id="L172">			System.out.println( &quot;--maxSpotsPerOverlap only works when --overlappingOnly AND --maxSpots is set.&quot;);</span>
+<span class="nc" id="L173">			System.exit( 0 );</span>
+		}
+
+<span class="nc" id="L176">		final SpimData2 dataGlobal = this.loadSpimData2();</span>
+
+<span class="nc bnc" id="L178" title="All 2 branches missed.">		if ( dataGlobal == null )</span>
+<span class="nc" id="L179">			return null;</span>
+
+<span class="nc" id="L181">		final ArrayList&lt; ViewId &gt; viewIdsGlobal = this.loadViewIds( dataGlobal );</span>
+
+<span class="nc bnc" id="L183" title="All 4 branches missed.">		if ( viewIdsGlobal == null || viewIdsGlobal.size() == 0 )</span>
+<span class="nc" id="L184">			return null;</span>
+
+		// Global variables that need to be serialized for Spark as each job needs access to them
+<span class="nc" id="L187">		final int[] blockSize = Import.csvStringToIntArray(blockSizeString);</span>
+<span class="nc" id="L188">		final URI xmlURI = this.xmlURI;</span>
+<span class="nc" id="L189">		final String label = this.label;</span>
+<span class="nc" id="L190">		final int downsampleXY = this.dsxy;</span>
+<span class="nc" id="L191">		final int downsampleZ = this.dsz;</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">		final double minIntensity = this.minIntensity == null ? Double.NaN : this.minIntensity;</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">		final double maxIntensity = this.maxIntensity == null ? Double.NaN : this.maxIntensity;</span>
+<span class="nc" id="L194">		final double sigma = this.sigma;</span>
+<span class="nc" id="L195">		final double threshold = this.threshold;</span>
+<span class="nc bnc" id="L196" title="All 4 branches missed.">		final boolean findMin = (this.type == IP.MIN || this.type == IP.BOTH);</span>
+<span class="nc bnc" id="L197" title="All 4 branches missed.">		final boolean findMax = (this.type == IP.MAX || this.type == IP.BOTH);</span>
+<span class="nc" id="L198">		final boolean onlyOverlappingRegions = overlappingOnly;</span>
+<span class="nc" id="L199">		final double combineDistance = SparkInterestPointDetection.combineDistance;</span>
+<span class="nc" id="L200">		final Localization localization = this.localization;</span>
+<span class="nc" id="L201">		final int maxSpots = this.maxSpots;</span>
+<span class="nc" id="L202">		final boolean maxSpotsPerOverlap = this.maxSpotsPerOverlap;</span>
+<span class="nc" id="L203">		final boolean prefetch = this.prefetch;</span>
+<span class="nc" id="L204">		final boolean storeIntensities = this.storeIntensities;</span>
+<span class="nc" id="L205">		final Integer medianFilter = this.medianFilter;</span>
+
+<span class="nc" id="L207">		System.out.println( &quot;label: &quot; + label );</span>
+<span class="nc" id="L208">		System.out.println( &quot;sigma: &quot; + sigma );</span>
+<span class="nc" id="L209">		System.out.println( &quot;threshold: &quot; + threshold );</span>
+<span class="nc" id="L210">		System.out.println( &quot;type: &quot; + type );</span>
+<span class="nc" id="L211">		System.out.println( &quot;localization: &quot; + localization );</span>
+<span class="nc" id="L212">		System.out.println( &quot;minIntensity: &quot; + minIntensity );</span>
+<span class="nc" id="L213">		System.out.println( &quot;maxIntensity: &quot; + maxIntensity );</span>
+<span class="nc" id="L214">		System.out.println( &quot;downsampleXY: &quot; + downsampleXY );</span>
+<span class="nc" id="L215">		System.out.println( &quot;downsampleZ: &quot; + downsampleZ );</span>
+<span class="nc" id="L216">		System.out.println( &quot;overlappingOnly: &quot; + onlyOverlappingRegions );</span>
+<span class="nc" id="L217">		System.out.println( &quot;prefetching: &quot; + prefetch );</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">		if ( maxSpots &gt; 0 ) {</span>
+<span class="nc" id="L219">			System.out.println( &quot;maxSpots: &quot; + maxSpots );</span>
+<span class="nc" id="L220">			System.out.println( &quot;maxSpotsPerOverlap: &quot; + maxSpotsPerOverlap );</span>
+		}
+<span class="nc" id="L222">		System.out.println( &quot;blockSize: &quot; + Util.printCoordinates( blockSize ) );</span>
+<span class="nc" id="L223">		System.out.println( &quot;medianFilter: &quot; + medianFilter );</span>
+<span class="nc" id="L224">		System.out.println( &quot;storeIntensities: &quot; + storeIntensities );</span>
+
+		//
+		// assemble all intervals that need to be processed
+		//
+<span class="nc" id="L229">		final ArrayList&lt; Pair&lt; ViewId, Interval &gt; &gt; toProcess = new ArrayList&lt;&gt;();</span>
+
+<span class="nc" id="L231">		long maxIntervalSize = 0;</span>
+
+		// TODO: parallelize with Spark
+<span class="nc bnc" id="L234" title="All 2 branches missed.">		for ( final ViewId viewId : viewIdsGlobal )</span>
+		{
+<span class="nc" id="L236">			final ViewDescription vd = dataGlobal.getSequenceDescription().getViewDescription( viewId );</span>
+<span class="nc" id="L237">			final ImgLoader imgLoader = dataGlobal.getSequenceDescription().getImgLoader();</span>
+
+			// load mipmap transform and bounds
+			// TODO: can we load the dimensions without (Virtually) opening the image?
+<span class="nc" id="L241">			final Pair&lt;RandomAccessibleInterval, AffineTransform3D&gt; input = openAndDownsample(</span>
+					imgLoader,
+					vd,
+					new long[] { downsampleXY, downsampleXY, downsampleZ },
+					true );
+
+			// only find interest points in regions that are currently overlapping with another view
+<span class="nc bnc" id="L248" title="All 2 branches missed.">			if ( onlyOverlappingRegions )</span>
+			{
+<span class="nc" id="L250">				final ArrayList&lt; Interval &gt; allIntervals = new ArrayList&lt;&gt;();</span>
+
+<span class="nc" id="L252">				final AffineTransform3D mipmapTransform = input.getB(); // maps downsampled image into global coordinate system</span>
+<span class="nc" id="L253">				final AffineTransform3D t1 = mipmapTransform.inverse(); // maps global coordinates into coordinate system of the downsampled image</span>
+
+				// pre-sort the pairs that actually overlap
+<span class="nc bnc" id="L256" title="All 2 branches missed.">				for ( final ViewId otherViewId : OverlappingViews.findAllOverlappingViewsFor(viewId, dataGlobal, viewIdsGlobal) )</span>
+				{
+<span class="nc bnc" id="L258" title="All 2 branches missed.">					if ( otherViewId.equals( viewId ) )</span>
+<span class="nc" id="L259">						continue;</span>
+
+					//
+					// does it overlap?
+					//
+<span class="nc" id="L264">					final Dimensions dim = ViewUtil.getDimensions( dataGlobal, viewId );</span>
+<span class="nc" id="L265">					final Dimensions dimOtherViewId = ViewUtil.getDimensions( dataGlobal, otherViewId );</span>
+<span class="nc" id="L266">					final ViewDescription vdOtherViewId = dataGlobal.getSequenceDescription().getViewDescription( viewId );</span>
+
+<span class="nc" id="L268">					final ViewRegistration reg = ViewUtil.getViewRegistration( dataGlobal, viewId );</span>
+<span class="nc" id="L269">					final ViewRegistration regOtherViewId = ViewUtil.getViewRegistration( dataGlobal, otherViewId );</span>
+
+					// load other mipmap transform
+<span class="nc" id="L272">					final AffineTransform3D mipmapTransformOtherViewId = new AffineTransform3D();</span>
+<span class="nc" id="L273">					openAndDownsample(imgLoader, vdOtherViewId, mipmapTransformOtherViewId, new long[] { downsampleXY, downsampleXY, downsampleZ }, true, true );</span>
+
+					// map the other view into the local coordinate space of the view we find interest points in
+					// apply inverse of the mipmap transform of each
+<span class="nc" id="L277">					final AffineTransform3D t2 = regOtherViewId.getModel().preConcatenate( reg.getModel().inverse() ).preConcatenate( mipmapTransformOtherViewId.inverse() );</span>
+
+<span class="nc" id="L279">					final Interval boundingBox = Intervals.smallestContainingInterval( t1.estimateBounds(new FinalInterval( dim ) ) );</span>
+<span class="nc" id="L280">					final Interval boundingBoxOther = Intervals.smallestContainingInterval( t2.estimateBounds( new FinalInterval( dimOtherViewId ) ) );</span>
+
+<span class="nc bnc" id="L282" title="All 2 branches missed.">					if ( ViewUtil.overlaps( boundingBox, boundingBoxOther ) )</span>
+					{
+<span class="nc" id="L284">						final Interval intersectionBoxes = Intervals.intersect( boundingBox, boundingBoxOther );</span>
+<span class="nc" id="L285">						final Interval intersection = Intervals.intersect( input.getA(), intersectionBoxes ); // make sure it fits (e.g. rounding errors)</span>
+
+<span class="nc" id="L287">						final long size = ViewUtil.size( intersection );</span>
+
+						//System.out.println( &quot;intersectionBoxes=&quot; + Util.printInterval( intersectionBoxes ) );
+<span class="nc" id="L290">						System.out.println( &quot;intersection=&quot; + Util.printInterval( intersection ) + &quot;, size (#px)=&quot; + size );</span>
+
+<span class="nc" id="L292">						maxIntervalSize = Math.max( maxIntervalSize, size );</span>
+
+<span class="nc" id="L294">						allIntervals.add( intersection );</span>
+					}
+<span class="nc" id="L296">				}</span>
+
+				// TODO: some sort of intersections might be useful
+				// find the sum of intersections ...
+<span class="nc" id="L300">				allIntervals.forEach( interval -&gt; toProcess.add( new ValuePair&lt;&gt;( viewId, interval ) ) );</span>
+<span class="nc" id="L301">			}</span>
+			else
+			{
+<span class="nc" id="L304">				toProcess.add( new ValuePair&lt;&gt;( viewId, new FinalInterval( input.getA() ) ) );</span>
+			}
+<span class="nc" id="L306">		}</span>
+
+		//
+		// turn all areas into grids and serializable objects (ViewId, intervalOffset, gridEntry)
+		//
+<span class="nc" id="L311">		final ArrayList&lt; Tuple3&lt;int[], long[], long[][] &gt; &gt; sparkProcess = new ArrayList&lt;&gt;();</span>
+
+<span class="nc" id="L313">		System.out.println( &quot;The following intervals will be processed:&quot;);</span>
+
+<span class="nc bnc" id="L315" title="All 2 branches missed.">		for ( final Pair&lt; ViewId, Interval &gt; pair : toProcess )</span>
+		{
+<span class="nc" id="L317">			final List&lt;long[][]&gt; grid = Grid.create( pair.getB().dimensionsAsLongArray(), blockSize );</span>
+<span class="nc" id="L318">			final long[] intervalOffset = pair.getB().minAsLongArray();</span>
+<span class="nc" id="L319">			final int[] serializedViewId = Spark.serializeViewId( pair.getA() );</span>
+
+<span class="nc" id="L321">			grid.forEach( gridEntry -&gt; {</span>
+<span class="nc" id="L322">				sparkProcess.add( new Tuple3&lt;&gt;( serializedViewId, intervalOffset, gridEntry ) );</span>
+
+<span class="nc" id="L324">				final long[] superBlockMin = new long[ intervalOffset.length ];</span>
+<span class="nc" id="L325">				Arrays.setAll( superBlockMin, d -&gt; gridEntry[ 0 ][ d ] + intervalOffset[ d ] );</span>
+
+<span class="nc" id="L327">				final long[] superBlockMax = new long[ intervalOffset.length ];</span>
+<span class="nc" id="L328">				Arrays.setAll( superBlockMax, d -&gt; superBlockMin[ d ] + gridEntry[ 1 ][ d ] - 1 );</span>
+
+<span class="nc" id="L330">				System.out.println( &quot;Processing &quot; + Group.pvid(pair.getA()) + &quot;, &quot; + Util.printInterval( new FinalInterval(superBlockMin, superBlockMax) ) + &quot; of full interval &quot; + Util.printInterval( pair.getB() ) );</span>
+<span class="nc" id="L331">			});</span>
+<span class="nc" id="L332">		}</span>
+
+<span class="nc" id="L334">		System.out.println( &quot;Total number of jobs: &quot; + sparkProcess.size() );</span>
+		
+<span class="nc" id="L336">		final SparkConf conf = new SparkConf().setAppName(&quot;SparkInterestPointDetection&quot;);</span>
+
+<span class="nc bnc" id="L338" title="All 2 branches missed.">		if ( localSparkBindAddress )</span>
+<span class="nc" id="L339">			conf.set(&quot;spark.driver.bindAddress&quot;, &quot;127.0.0.1&quot;);</span>
+
+<span class="nc" id="L341">		final JavaSparkContext sc = new JavaSparkContext(conf);</span>
+<span class="nc" id="L342">		sc.setLogLevel(&quot;ERROR&quot;);</span>
+
+<span class="nc" id="L344">		final JavaRDD&lt;Tuple3&lt;int[], long[], long[][] &gt;&gt; rddJob = sc.parallelize( sparkProcess ).repartition( Math.min( Spark.maxPartitions, sparkProcess.size() ) );</span>
+
+		// return ViewId, interval, locations, intensities
+<span class="nc" id="L347">		final JavaRDD&lt; Tuple4&lt;int[], long[][], double[][], double[] &gt; &gt; rddResult = rddJob.map( serializedInput -&gt;</span>
+		{
+<span class="nc" id="L349">			final SpimData2 data = Spark.getSparkJobSpimData2( xmlURI );</span>
+<span class="nc" id="L350">			final ViewId viewId = Spark.deserializeViewId( serializedInput._1() );</span>
+<span class="nc" id="L351">			final ViewDescription vd = data.getSequenceDescription().getViewDescription( viewId );</span>
+
+			// The min coordinates of the block that this job processes (in pixels)
+<span class="nc" id="L354">			final long[] superBlockMin = new long[ serializedInput._2().length ];</span>
+<span class="nc" id="L355">			Arrays.setAll( superBlockMin, d -&gt; serializedInput._3()[ 0 ][ d ] + serializedInput._2()[ d ] );</span>
+
+			// The size of the block that this job renders (in pixels)
+<span class="nc" id="L358">			final long[] superBlockSize = serializedInput._3()[ 1 ];</span>
+
+			// The min coordinates of the block that this job processes (in pixels)
+<span class="nc" id="L361">			final long[] superBlockMax = new long[ serializedInput._2().length ];</span>
+<span class="nc" id="L362">			Arrays.setAll( superBlockMax, d -&gt; superBlockMin[ d ] + superBlockSize[ d ] - 1 );</span>
+
+			// the interval this Spark job will process
+<span class="nc" id="L365">			final Interval processInterval = new FinalInterval( superBlockMin, superBlockMax );</span>
+
+			// the parameters for Difference-of-Gaussian (DoG)
+<span class="nc" id="L368">			final DoGParameters dog = new DoGParameters();</span>
+
+<span class="nc" id="L370">			dog.imgloader = data.getSequenceDescription().getImgLoader();</span>
+<span class="nc" id="L371">			dog.toProcess = new ArrayList&lt; ViewDescription &gt;( Arrays.asList( vd ) );</span>
+
+<span class="nc bnc" id="L373" title="All 2 branches missed.">			dog.localization = localization == Localization.NONE ? 0 : 1;</span>
+<span class="nc" id="L374">			dog.downsampleZ = downsampleZ;</span>
+<span class="nc" id="L375">			dog.downsampleXY = downsampleXY;</span>
+<span class="nc" id="L376">			dog.imageSigmaX = DifferenceOfGUI.defaultImageSigmaX;</span>
+<span class="nc" id="L377">			dog.imageSigmaY = DifferenceOfGUI.defaultImageSigmaY;</span>
+<span class="nc" id="L378">			dog.imageSigmaZ = DifferenceOfGUI.defaultImageSigmaZ;</span>
+
+<span class="nc" id="L380">			dog.minIntensity = minIntensity;</span>
+<span class="nc" id="L381">			dog.maxIntensity = maxIntensity;</span>
+
+<span class="nc" id="L383">			dog.sigma = sigma;</span>
+<span class="nc" id="L384">			dog.threshold = threshold;</span>
+<span class="nc" id="L385">			dog.findMin = findMin;</span>
+<span class="nc" id="L386">			dog.findMax = findMax;</span>
+
+<span class="nc" id="L388">			dog.cuda = null;</span>
+<span class="nc" id="L389">			dog.deviceCUDA = null;</span>
+<span class="nc" id="L390">			dog.accurateCUDA = false;</span>
+<span class="nc" id="L391">			dog.percentGPUMem = 0;</span>
+
+<span class="nc" id="L393">			dog.limitDetections = false;</span>
+<span class="nc" id="L394">			dog.maxDetections = 0;</span>
+<span class="nc" id="L395">			dog.maxDetectionsTypeIndex = 0;</span>
+
+<span class="nc" id="L397">			dog.showProgressMin = Double.NaN;</span>
+<span class="nc" id="L398">			dog.showProgressMax = Double.NaN;</span>
+
+			//
+			// runs virtual downsampling so it only loads what it needs
+			// ideally only run with pre-computed downsample steps for efficiency
+			//
+<span class="nc" id="L404">			final Pair&lt;RandomAccessibleInterval, AffineTransform3D&gt; input = openAndDownsample(</span>
+						dog.imgloader,
+						vd,
+						new long[] { dog.downsampleXY, dog.downsampleXY, dog.downsampleZ },
+						true );
+
+<span class="nc" id="L410">			System.out.println( &quot;Processing &quot; + Group.pvid(viewId) + &quot;, &quot; + Util.printInterval( processInterval ) + &quot; of full interval &quot; + Util.printInterval( input.getA() ) );</span>
+
+<span class="nc bnc" id="L412" title="All 2 branches missed.">			if ( prefetch )</span>
+			{
+				// how big is the biggest sigma? It defines the overlap with neighboring blocks that we need
+<span class="nc" id="L415">				final Pair&lt; double[][], Float &gt; sigmas = DoGImgLib2.computeSigmas( (float)dog.sigma, input.getA().numDimensions() );</span>
+<span class="nc" id="L416">				final int[] halfKernelSizes = Gauss3.halfkernelsizes( sigmas.getA()[ 1 ] );</span>
+<span class="nc" id="L417">				final int maxKernelSize = Collections.max( Arrays.stream( halfKernelSizes ).boxed().collect( Collectors.toList()) );</span>
+
+				// here we put in the inverse mipmap transform and pretend its a fusion so we can re-use Tobi's code
+				// that finds which blocks need to be prefetched from an input image
+<span class="nc" id="L421">				final List&lt; PrefetchPixel&lt; ? &gt; &gt; prefetchBlocks = ViewUtil.findOverlappingBlocks( data, viewId, input.getB().inverse(), processInterval, maxKernelSize );</span>
+
+<span class="nc" id="L423">				System.out.println( &quot;Prefetching &quot; + prefetchBlocks.size() + &quot; blocks for &quot; + Group.pvid(viewId) + &quot;, &quot; + Util.printInterval( processInterval ) );</span>
+
+<span class="nc" id="L425">				final ExecutorService prefetchExecutor = Executors.newCachedThreadPool(); //Executors.newFixedThreadPool( SparkAffineFusion.N_PREFETCH_THREADS );</span>
+<span class="nc" id="L426">				prefetchExecutor.invokeAll( prefetchBlocks );</span>
+<span class="nc" id="L427">				prefetchExecutor.shutdown();</span>
+			}
+
+			final RandomAccessibleInterval inputImage;
+
+<span class="nc bnc" id="L432" title="All 4 branches missed.">			if ( medianFilter != null &amp;&amp; medianFilter &gt; 0 )</span>
+			{
+<span class="nc" id="L434">				inputImage = LazyBackgroundSubtract.init(</span>
+<span class="nc" id="L435">						(RandomAccessible)Views.extendMirrorDouble( input.getA() ),</span>
+<span class="nc" id="L436">						new FinalInterval(input.getA()),</span>
+<span class="nc" id="L437">						medianFilter,</span>
+						new int[] {512, 512, 128} );
+			}
+			else
+			{
+<span class="nc" id="L442">				inputImage = input.getA();</span>
+			}
+
+<span class="nc" id="L445">			final ExecutorService service = Threads.createFixedExecutorService( 1 );</span>
+
+			@SuppressWarnings(&quot;unchecked&quot;)
+<span class="nc" id="L448">			final ArrayList&lt; InterestPoint &gt; ips = DoGImgLib2.computeDoG(</span>
+<span class="nc" id="L449">					(RandomAccessible)Views.extendMirrorDouble( inputImage ), // the entire image, extended to infinity</span>
+					null, // mask
+					processInterval,
+					dog.sigma,
+					dog.threshold,
+					dog.localization,
+					dog.findMin,
+					dog.findMax,
+					dog.minIntensity,
+					dog.maxIntensity,
+					new int[] {128, 128, 64},
+					service,
+					dog.cuda,
+					dog.deviceCUDA,
+					dog.accurateCUDA,
+					dog.percentGPUMem );
+
+<span class="nc" id="L466">			service.shutdown();</span>
+
+<span class="nc bnc" id="L468" title="All 4 branches missed.">			if ( ips == null || ips.size() == 0 )</span>
+			{
+<span class="nc" id="L470">				System.out.println( &quot;No interest points found for &quot; + Group.pvid(viewId) + &quot;, &quot; + Util.printInterval( processInterval ) );</span>
+<span class="nc" id="L471">				return new Tuple4&lt;&gt;( serializedInput._1(), Spark.serializeInterval( processInterval ), null, null );</span>
+			}
+
+			final double[] intensities;
+
+<span class="nc bnc" id="L476" title="All 4 branches missed.">			if ( storeIntensities || maxSpots &gt; 0 )</span>
+			{
+<span class="nc" id="L478">				System.out.println( &quot;Retrieving intensities for interest points '&quot; + label + &quot;' for &quot; + Group.pvid(viewId) + &quot;, &quot; + Util.printInterval( processInterval ) + &quot; ... &quot; );</span>
+
+				// for image interpolation
+<span class="nc" id="L481">				final RealRandomAccessible&lt;FloatType&gt; rra = Views.interpolate(</span>
+<span class="nc" id="L482">						Views.extendBorder(</span>
+<span class="nc" id="L483">								Converters.convertRAI(</span>
+<span class="nc" id="L484">										(RandomAccessibleInterval&lt;RealType&gt;)(Object)input.getA(),</span>
+<span class="nc" id="L485">										(a,b) -&gt; b.set( a.getRealFloat() ),</span>
+										new FloatType() ) ),
+						new NLinearInterpolatorFactory&lt;&gt;() );
+<span class="nc" id="L488">				final RealRandomAccess&lt; FloatType&gt; r = rra.realRandomAccess();</span>
+
+<span class="nc" id="L490">				intensities = new double[ ips.size() ];</span>
+
+<span class="nc bnc" id="L492" title="All 2 branches missed.">				for ( int i = 0; i &lt; ips.size(); ++i )</span>
+				{
+<span class="nc" id="L494">					r.setPosition( ips.get( i ) );</span>
+<span class="nc" id="L495">					intensities[ i ] = r.get().get();</span>
+				}
+<span class="nc" id="L497">			}</span>
+			else
+			{
+<span class="nc" id="L500">				intensities = null;</span>
+			}
+
+			// correcting for downsampling
+<span class="nc" id="L504">			System.out.println( &quot;Correcting interest points '&quot; + label + &quot;', &quot; + Group.pvid(viewId) + &quot;, &quot; + Util.printInterval( processInterval ) + &quot; for downsampling ... &quot; );</span>
+
+<span class="nc" id="L506">			DownsampleTools.correctForDownsampling( ips, input.getB() );</span>
+
+<span class="nc" id="L508">			final double[][] points = new double[ ips.size() ][];</span>
+
+<span class="nc bnc" id="L510" title="All 2 branches missed.">			for ( int i = 0; i &lt; ips.size(); ++i )</span>
+<span class="nc" id="L511">				points[ i ] = ips.get( i ).getL();</span>
+
+<span class="nc" id="L513">			System.out.println( &quot;Returning &quot; + ips.size() + &quot; interest points '&quot; + label + &quot;' for &quot; + Group.pvid(viewId) + &quot;, &quot; + Util.printInterval( processInterval ) + &quot; ... &quot; );</span>
+
+			// return ViewId, interval, locations, intensities
+<span class="nc" id="L516">			return new Tuple4&lt;&gt;( serializedInput._1(), Spark.serializeInterval( processInterval ), points, intensities );</span>
+		});
+
+
+<span class="nc" id="L520">		rddResult.cache();</span>
+<span class="nc" id="L521">		rddResult.count();</span>
+
+<span class="nc" id="L523">		final List&lt;Tuple4&lt;int[], long[][], double[][], double[]&gt;&gt; results = rddResult.collect();</span>
+
+<span class="nc" id="L525">		sc.close();</span>
+
+<span class="nc" id="L527">		System.out.println( &quot;Computed all interest points, statistics:&quot; );</span>
+
+		// assemble all interest point intervals per ViewId
+<span class="nc" id="L530">		final HashMap&lt; ViewId, List&lt; List&lt; InterestPoint &gt; &gt; &gt; interestPointsPerViewId = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L531">		final HashMap&lt; ViewId, List&lt; List&lt; Double &gt; &gt; &gt; intensitiesPerViewId = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L532">		final HashMap&lt; ViewId, List&lt; Interval &gt; &gt; intervalsPerViewId = new HashMap&lt;&gt;();</span>
+
+<span class="nc bnc" id="L534" title="All 2 branches missed.">		for ( final Tuple4&lt;int[], long[][], double[][], double[]&gt; tuple : results )</span>
+		{
+<span class="nc" id="L536">			final ViewId viewId = Spark.deserializeViewId( tuple._1() );</span>
+<span class="nc" id="L537">			final double[][] points = tuple._3();</span>
+
+<span class="nc bnc" id="L539" title="All 4 branches missed.">			if ( points != null &amp;&amp; points.length &gt; 0 )</span>
+			{
+<span class="nc" id="L541">				interestPointsPerViewId.putIfAbsent(viewId, new ArrayList&lt;&gt;() );</span>
+<span class="nc" id="L542">				interestPointsPerViewId.get( viewId ).add( Spark.deserializeInterestPoints(points) );</span>
+
+<span class="nc" id="L544">				intervalsPerViewId.putIfAbsent(viewId, new ArrayList&lt;&gt;() );</span>
+<span class="nc" id="L545">				intervalsPerViewId.get( viewId ).add( Spark.deserializeInterval( tuple._2() ) );</span>
+
+<span class="nc bnc" id="L547" title="All 4 branches missed.">				if ( storeIntensities || maxSpots &gt; 0 )</span>
+				{
+<span class="nc" id="L549">					intensitiesPerViewId.putIfAbsent(viewId, new ArrayList&lt;&gt;() );</span>
+<span class="nc" id="L550">					intensitiesPerViewId.get( viewId ).add( DoubleStream.of(tuple._4()).boxed().collect(Collectors.toList() ) );</span>
+				}
+			}
+<span class="nc" id="L553">		}</span>
+
+		// assemble all ViewIds
+<span class="nc" id="L556">		final ArrayList&lt; ViewId &gt; viewIds = new ArrayList&lt;&gt;( interestPointsPerViewId.keySet() );</span>
+<span class="nc" id="L557">		Collections.sort( viewIds );</span>
+
+		// we need to filter per overlap before combining
+<span class="nc bnc" id="L560" title="All 4 branches missed.">		if ( maxSpotsPerOverlap &amp;&amp; maxSpots &gt; 0 )</span>
+		{
+<span class="nc bnc" id="L562" title="All 2 branches missed.">			for ( final ViewId viewId : viewIds )</span>
+			{
+<span class="nc" id="L564">				final List&lt; List&lt; InterestPoint &gt; &gt; ipsList = interestPointsPerViewId.get( viewId );</span>
+<span class="nc" id="L565">				final List&lt; List&lt; Double &gt; &gt; intensitiesList = intensitiesPerViewId.get( viewId );</span>
+<span class="nc" id="L566">				final List&lt; Interval &gt; intervalsList = intervalsPerViewId.get( viewId ); // note: in downsampled coordinates(!)</span>
+
+				// find all intervals of this view, then assign points to it
+<span class="nc" id="L569">				final List&lt; Tuple3&lt; Interval, List&lt; InterestPoint &gt;, List&lt; Double &gt; &gt; &gt; intervalData = new ArrayList&lt;&gt;();</span>
+
+				// for each toProcess block do
+<span class="nc bnc" id="L572" title="All 2 branches missed.">				for ( final Pair&lt; ViewId, Interval &gt; p : toProcess )</span>
+				{
+<span class="nc bnc" id="L574" title="All 2 branches missed.">					if ( p.getA().equals( viewId ) )</span>
+					{
+<span class="nc" id="L576">						final Interval toProcessInterval = p.getB();</span>
+
+<span class="nc" id="L578">						final List&lt; InterestPoint &gt; ipsBlock = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L579">						final List&lt; Double &gt; intensitiesBlock = new ArrayList&lt;&gt;();</span>
+
+						// figure out which computed blockIntervals fall into this toProcessInterval
+<span class="nc bnc" id="L582" title="All 2 branches missed.">						for ( int l = 0; l &lt; ipsList.size(); ++l )</span>
+						{
+<span class="nc" id="L584">							final Interval blockInterval = intervalsList.get( l );</span>
+
+<span class="nc bnc" id="L586" title="All 2 branches missed.">							if ( Intervals.contains( toProcessInterval, blockInterval ) )</span>
+							{
+<span class="nc" id="L588">								ipsBlock.addAll( ipsList.get( l ) );</span>
+<span class="nc" id="L589">								intensitiesBlock.addAll( intensitiesList.get( l ) );</span>
+							}
+						}
+
+<span class="nc" id="L593">						intervalData.add( new Tuple3&lt;&gt;( toProcessInterval, ipsBlock, intensitiesBlock ) );</span>
+					}
+<span class="nc" id="L595">				}</span>
+
+				// to later put back into interestPointsPerViewId and intensitiesPerViewId
+<span class="nc" id="L598">				interestPointsPerViewId.get( viewId ).clear();</span>
+<span class="nc" id="L599">				intensitiesPerViewId.get( viewId ).clear();</span>
+
+				// now filter each interval of each view
+<span class="nc bnc" id="L602" title="All 2 branches missed.">				for ( final Tuple3&lt; Interval, List&lt; InterestPoint &gt;, List&lt; Double &gt; &gt; tuple : intervalData )</span>
+				{
+<span class="nc" id="L604">					final int myMaxSpots = (int)Math.round( maxSpots * ( (double)ViewUtil.size( tuple._1() ) /(double)maxIntervalSize ) );</span>
+
+<span class="nc bnc" id="L606" title="All 4 branches missed.">					if ( myMaxSpots &gt; 0 &amp;&amp; myMaxSpots &lt; tuple._2().size() )</span>
+					{
+<span class="nc" id="L608">						final int oldSize = tuple._2().size();</span>
+<span class="nc" id="L609">						filterPoints( tuple._2(), tuple._3(), myMaxSpots );</span>
+<span class="nc" id="L610">						System.out.println( &quot;Filtered interval (limit=&quot; + myMaxSpots + &quot;) &quot; + Util.printInterval( tuple._1() ) + &quot; (&quot; + Group.pvid( viewId ) + &quot;): &quot; + oldSize + &quot; &gt;&gt;&gt; &quot; + tuple._2().size() );</span>
+<span class="nc" id="L611">					}</span>
+					else
+					{
+<span class="nc" id="L614">						System.out.println( &quot;NOT filtered interval (limit=&quot; + myMaxSpots + &quot;) &quot; + Util.printInterval( tuple._1() ) + &quot; (&quot; + Group.pvid( viewId ) + &quot;): &quot; + tuple._2().size() );</span>
+					}
+
+<span class="nc" id="L617">					interestPointsPerViewId.get( viewId ).add( tuple._2() );</span>
+<span class="nc" id="L618">					intensitiesPerViewId.get( viewId ).add( tuple._3() );</span>
+<span class="nc" id="L619">				}</span>
+<span class="nc" id="L620">			}</span>
+		}
+
+		// now combine all jobs and fix potential overlap (overlappingOnly)
+<span class="nc" id="L624">		final HashMap&lt; ViewId, List&lt; InterestPoint &gt; &gt; interestPoints = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L625">		final HashMap&lt; ViewId, List&lt; Double &gt; &gt; intensitiesIPs = new HashMap&lt;&gt;();</span>
+
+<span class="nc bnc" id="L627" title="All 2 branches missed.">		for ( final ViewId viewId : viewIds )</span>
+		{
+<span class="nc" id="L629">			final ArrayList&lt; InterestPoint &gt; myIps = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L630">			final ArrayList&lt; Double &gt; myIntensities = new ArrayList&lt;&gt;();</span>
+
+<span class="nc" id="L632">			final List&lt; List&lt; InterestPoint &gt; &gt; ipsList = interestPointsPerViewId.get( viewId );</span>
+			final List&lt; List&lt; Double &gt; &gt; intensitiesList;
+
+<span class="nc bnc" id="L635" title="All 4 branches missed.">			if ( storeIntensities || maxSpots &gt; 0 )</span>
+<span class="nc" id="L636">				intensitiesList = intensitiesPerViewId.get( viewId );</span>
+			else
+<span class="nc" id="L638">				intensitiesList = null;</span>
+
+			// combine points since overlapping areas might exist
+<span class="nc bnc" id="L641" title="All 2 branches missed.">			for ( int l = 0; l &lt; ipsList.size(); ++l )</span>
+			{
+<span class="nc" id="L643">				final List&lt; InterestPoint &gt; ips = ipsList.get( l );</span>
+				final List&lt; Double &gt; intensities;
+
+<span class="nc bnc" id="L646" title="All 4 branches missed.">				if ( storeIntensities || maxSpots &gt; 0 )</span>
+<span class="nc" id="L647">					intensities = intensitiesList.get( l );</span>
+				else
+<span class="nc" id="L649">					intensities = null;</span>
+
+<span class="nc bnc" id="L651" title="All 4 branches missed.">				if ( !overlappingOnly || myIps.size() == 0 )</span>
+				{
+<span class="nc" id="L653">					myIps.addAll( ips );</span>
+
+<span class="nc bnc" id="L655" title="All 4 branches missed.">					if ( storeIntensities || maxSpots &gt; 0 )</span>
+<span class="nc" id="L656">						myIntensities.addAll( intensities );</span>
+				}
+				else
+				{
+<span class="nc" id="L660">					final KDTree&lt; InterestPoint &gt; tree = new KDTree&lt;&gt;(myIps, myIps);</span>
+<span class="nc" id="L661">					final NearestNeighborSearchOnKDTree&lt; InterestPoint &gt; search = new NearestNeighborSearchOnKDTree&lt;&gt;( tree );</span>
+
+<span class="nc bnc" id="L663" title="All 2 branches missed.">					for ( int i = 0; i &lt; ips.size(); ++i )</span>
+					{
+<span class="nc" id="L665">						final InterestPoint ip = ips.get( i );</span>
+<span class="nc" id="L666">						search.search( ip );</span>
+
+<span class="nc bnc" id="L668" title="All 2 branches missed.">						if ( search.getDistance() &gt; combineDistance )</span>
+						{
+<span class="nc" id="L670">							myIps.add( ip );</span>
+
+<span class="nc bnc" id="L672" title="All 4 branches missed.">							if ( storeIntensities || maxSpots &gt; 0 )</span>
+<span class="nc" id="L673">								myIntensities.add( intensities.get( i ) );</span>
+						}
+					}
+				}
+			}
+
+<span class="nc bnc" id="L679" title="All 2 branches missed.">			if ( myIps.size() &gt; 0 )</span>
+			{
+				// we need to sort and assign new ids since order is assumed when loading corresponding interest points, and we will have duplicate ids otherwise
+<span class="nc" id="L682">				final ArrayList&lt; InterestPoint &gt; myIpsNewId = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L684" title="All 2 branches missed.">				for ( int id = 0; id &lt; myIps.size(); ++id )</span>
+<span class="nc" id="L685">					myIpsNewId.add( new InterestPoint( id, myIps.get( id ).getL() ) );</span>
+
+<span class="nc" id="L687">				System.out.println( Group.pvid( viewId ) + &quot;: &quot; + myIpsNewId.size() );</span>
+
+<span class="nc bnc" id="L689" title="All 6 branches missed.">				if ( !maxSpotsPerOverlap &amp;&amp; maxSpots &gt; 0 &amp;&amp; maxSpots &lt; myIpsNewId.size() )</span>
+				{
+<span class="nc" id="L691">					filterPoints( myIpsNewId, myIntensities, maxSpots );</span>
+					/*
+					// filter for the brightnest N spots
+					final ArrayList&lt; Pair&lt; Double, InterestPoint &gt; &gt; combinedList = new ArrayList&lt;&gt;();
+
+					for ( int i = 0; i &lt; myIps.size(); ++i )
+						combinedList.add( new ValuePair&lt;Double, InterestPoint&gt;(myIntensities.get( i ), myIpsNewId.get( i )));
+
+					// sort from large to small
+					Collections.sort(combinedList, (a,b) -&gt; b.getA().compareTo( a.getA() ) );
+
+					myIpsNewId.clear();
+					myIntensities.clear();
+
+					for ( int i = 0; i &lt; maxSpots; ++i )
+					{
+						myIntensities.add( combinedList.get( i ).getA() );
+						myIpsNewId.add( new InterestPoint( i, combinedList.get( i ).getB().getL() ) ); // new id's again ...
+					}
+					*/
+<span class="nc" id="L711">					System.out.println( Group.pvid( viewId ) + &quot; (after applying maxSpots): &quot; + myIpsNewId.size() );</span>
+				}
+
+<span class="nc" id="L714">				interestPoints.put(viewId, myIpsNewId);</span>
+
+<span class="nc bnc" id="L716" title="All 2 branches missed.">				if ( storeIntensities )</span>
+<span class="nc" id="L717">					intensitiesIPs.put(viewId, myIntensities );</span>
+<span class="nc" id="L718">			}</span>
+			else
+			{
+<span class="nc" id="L721">				interestPoints.put(viewId, new ArrayList&lt;&gt;());</span>
+
+<span class="nc" id="L723">				System.out.println( Group.pvid( viewId ) + &quot;: no points found.&quot; );</span>
+			}
+<span class="nc" id="L725">		}</span>
+
+<span class="nc bnc" id="L727" title="All 2 branches missed.">		if ( !dryRun )</span>
+		{
+			// save interest points for ALL views, not only those where we found points
+<span class="nc bnc" id="L730" title="All 2 branches missed.">			for ( final ViewId viewId : viewIdsGlobal /*viewIds*/ )</span>
+			{
+<span class="nc" id="L732">				System.out.println( &quot;Saving interest point '&quot; + label + &quot;' N5 for &quot; + Group.pvid(viewId) + &quot; ... &quot; );</span>
+				
+<span class="nc" id="L734">				final InterestPoints ipl = InterestPoints.newInstance( dataGlobal.getBasePathURI(), viewId, label );</span>
+
+				// otherwise they are not saved into the XML and into the N5
+<span class="nc bnc" id="L737" title="All 2 branches missed.">				if ( interestPoints.get( viewId ) == null )</span>
+<span class="nc" id="L738">					interestPoints.put( viewId, new ArrayList&lt;&gt;() );</span>
+
+<span class="nc" id="L740">				ipl.setInterestPoints( interestPoints.get( viewId ) );</span>
+<span class="nc" id="L741">				ipl.setCorrespondingInterestPoints( new ArrayList&lt; CorrespondingInterestPoints &gt;() );</span>
+
+<span class="nc" id="L743">				ipl.saveInterestPoints( true );</span>
+<span class="nc" id="L744">				ipl.saveCorrespondingInterestPoints( true );</span>
+
+				// store image intensities for interest points
+<span class="nc bnc" id="L747" title="All 2 branches missed.">				if ( storeIntensities )</span>
+				{
+<span class="nc" id="L749">					System.out.println( &quot;Retrieving intensities for interest points '&quot; + label + &quot;' for &quot; + Group.pvid(viewId) + &quot; ... &quot; );</span>
+
+<span class="nc" id="L751">					final InterestPointsN5 i = (InterestPointsN5)ipl;</span>
+
+					//final N5FSWriter n5Writer = new N5FSWriter( new File( i.getBaseDir().getAbsolutePath(), InterestPointsN5.baseN5 ).getAbsolutePath() );
+<span class="nc" id="L754">					final N5Writer n5Writer = URITools.instantiateN5Writer( StorageFormat.N5, URITools.toURI( URITools.appendName( i.getBaseDir(), InterestPointsN5.baseN5 ) ) );</span>
+
+<span class="nc" id="L756">					final String datasetIntensities = i.ipDataset() + &quot;/intensities&quot;;</span>
+
+<span class="nc bnc" id="L758" title="All 2 branches missed.">					if ( interestPoints.get( viewId ).size() == 0 )</span>
+					{
+<span class="nc" id="L760">						n5Writer.createDataset(</span>
+								datasetIntensities,
+								new long[] {0},
+								new int[] {1},
+								DataType.FLOAT32,
+								new GzipCompression());
+					}
+					else
+					{
+<span class="nc" id="L769">						List&lt;Double&gt; intensitiesList = intensitiesIPs.get( viewId );</span>
+
+						// 1 x N array (which is a 2D array)
+<span class="nc" id="L772">						final FunctionRandomAccessible&lt; FloatType &gt; intensities =</span>
+								new FunctionRandomAccessible&lt;&gt;(
+										2,
+										(location, value) -&gt;
+										{
+<span class="nc" id="L777">											final int index = location.getIntPosition( 1 );</span>
+<span class="nc" id="L778">											value.set( intensitiesList.get( index ).floatValue() );</span>
+<span class="nc" id="L779">										},</span>
+										FloatType::new );
+	
+<span class="nc" id="L782">						final RandomAccessibleInterval&lt; FloatType &gt; intensityData =</span>
+<span class="nc" id="L783">								Views.interval( intensities, new long[] { 0, 0 }, new long[] { 0, intensitiesList.size() - 1 } );</span>
+	
+<span class="nc" id="L785">						N5Utils.save( intensityData, n5Writer, datasetIntensities, new int[] { 1, InterestPointsN5.defaultBlockSize }, new GzipCompression() );</span>
+					}
+	
+<span class="nc" id="L788">					IOFunctions.println( &quot;Saved: &quot; + URITools.appendName( i.getBaseDir(), InterestPointsN5.baseN5 ) + &quot;:/&quot; + datasetIntensities );</span>
+	
+<span class="nc" id="L790">					n5Writer.close();</span>
+				}
+<span class="nc" id="L792">			}</span>
+
+			// save XML
+<span class="nc" id="L795">			final String params = &quot;DOG (Spark) s=&quot; + sigma + &quot; t=&quot; + threshold + &quot; overlappingOnly=&quot; + overlappingOnly + &quot; min=&quot; + findMin + &quot; max=&quot; + findMax +</span>
+					&quot; downsampleXY=&quot; + downsampleXY + &quot; downsampleZ=&quot; + downsampleZ + &quot; minIntensity=&quot; + minIntensity + &quot; maxIntensity=&quot; + maxIntensity;
+	
+<span class="nc" id="L798">			InterestPointTools.addInterestPoints( dataGlobal, label, interestPoints, params );</span>
+
+<span class="nc" id="L800">			System.out.println( &quot;Saving XML (metadata only) ...&quot; );</span>
+	
+<span class="nc" id="L802">			new XmlIoSpimData2().save( dataGlobal, xmlURI );</span>
+		}
+
+<span class="nc" id="L805">		System.out.println( &quot;Done ...&quot; );</span>
+
+<span class="nc" id="L807">		return null;</span>
+	}
+
+	public static void filterPoints(
+			final List&lt; InterestPoint &gt; myIps,
+			final List&lt; Double &gt; myIntensities,
+			final int maxSpots )
+	{
+		// filter for the brightnest N spots
+<span class="nc" id="L816">		final ArrayList&lt; Pair&lt; Double, InterestPoint &gt; &gt; combinedList = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L818" title="All 2 branches missed.">		for ( int i = 0; i &lt; myIps.size(); ++i )</span>
+<span class="nc" id="L819">			combinedList.add( new ValuePair&lt;Double, InterestPoint&gt;(myIntensities.get( i ), myIps.get( i )));</span>
+
+		// sort from large to small
+<span class="nc" id="L822">		Collections.sort(combinedList, (a,b) -&gt; b.getA().compareTo( a.getA() ) );</span>
+
+<span class="nc" id="L824">		myIps.clear();</span>
+<span class="nc" id="L825">		myIntensities.clear();</span>
+
+<span class="nc bnc" id="L827" title="All 2 branches missed.">		for ( int i = 0; i &lt; maxSpots; ++i )</span>
+		{
+<span class="nc" id="L829">			myIntensities.add( combinedList.get( i ).getA() );</span>
+<span class="nc" id="L830">			myIps.add( new InterestPoint( i, combinedList.get( i ).getB().getL() ) ); // new id's again ...</span>
+		}
+<span class="nc" id="L832">	}</span>
+
+	// TODO: this has been pushed up to the multiview-reconstruction code, use new version
+	public static Pair&lt;RandomAccessibleInterval, AffineTransform3D&gt; openAndDownsample(
+			final BasicImgLoader imgLoader,
+			final ViewId vd,
+			final long[] downsampleFactors,
+			final boolean virtualDownsampling )
+	{
+<span class="nc" id="L841">		final AffineTransform3D mipMapTransform = new AffineTransform3D();</span>
+
+<span class="nc" id="L843">		final RandomAccessibleInterval img = openAndDownsample(imgLoader, vd, mipMapTransform, downsampleFactors, false, virtualDownsampling );</span>
+
+<span class="nc" id="L845">		return new ValuePair&lt;RandomAccessibleInterval, AffineTransform3D&gt;( img, mipMapTransform );</span>
+	}
+
+	// TODO: this has been pushed up to the multiview-reconstruction code, use new version
+<span class="nc" id="L849">	protected static final int[] ds = { 1, 2, 4, 8, 16, 32, 64, 128 };</span>
+	private static RandomAccessibleInterval openAndDownsample(
+			final BasicImgLoader imgLoader,
+			final ViewId vd,
+			final AffineTransform3D mipMapTransform,
+			long[] downsampleFactors,
+			final boolean transformOnly, // only for ImgLib1 legacy code
+			final boolean virtualDownsampling )
+	{
+<span class="nc" id="L858">		long dsx = downsampleFactors[0];</span>
+<span class="nc" id="L859">		long dsy = downsampleFactors[1];</span>
+<span class="nc bnc" id="L860" title="All 2 branches missed.">		long dsz = (downsampleFactors.length &gt; 2) ? downsampleFactors[ 2 ] : 1;</span>
+
+<span class="nc" id="L862">		RandomAccessibleInterval input = null;</span>
+
+<span class="nc bnc" id="L864" title="All 8 branches missed.">		if ( ( dsx &gt; 1 || dsy &gt; 1 || dsz &gt; 1 ) &amp;&amp; MultiResolutionImgLoader.class.isInstance( imgLoader ) )</span>
+		{
+<span class="nc" id="L866">			MultiResolutionImgLoader mrImgLoader = ( MultiResolutionImgLoader ) imgLoader;</span>
+
+<span class="nc" id="L868">			double[][] mipmapResolutions = mrImgLoader.getSetupImgLoader( vd.getViewSetupId() ).getMipmapResolutions();</span>
+
+<span class="nc" id="L870">			int bestLevel = 0;</span>
+<span class="nc bnc" id="L871" title="All 2 branches missed.">			for ( int level = 0; level &lt; mipmapResolutions.length; ++level )</span>
+			{
+<span class="nc" id="L873">				double[] factors = mipmapResolutions[ level ];</span>
+				
+				// this fails if factors are not ints
+<span class="nc" id="L876">				final int fx = (int)Math.round( factors[ 0 ] );</span>
+<span class="nc" id="L877">				final int fy = (int)Math.round( factors[ 1 ] );</span>
+<span class="nc" id="L878">				final int fz = (int)Math.round( factors[ 2 ] );</span>
+				
+<span class="nc bnc" id="L880" title="All 12 branches missed.">				if ( fx &lt;= dsx &amp;&amp; fy &lt;= dsy &amp;&amp; fz &lt;= dsz &amp;&amp; contains( fx, ds ) &amp;&amp; contains( fy, ds ) &amp;&amp; contains( fz, ds ) )</span>
+<span class="nc" id="L881">					bestLevel = level;</span>
+			}
+
+<span class="nc" id="L884">			final int fx = (int)Math.round( mipmapResolutions[ bestLevel ][ 0 ] );</span>
+<span class="nc" id="L885">			final int fy = (int)Math.round( mipmapResolutions[ bestLevel ][ 1 ] );</span>
+<span class="nc" id="L886">			final int fz = (int)Math.round( mipmapResolutions[ bestLevel ][ 2 ] );</span>
+
+<span class="nc bnc" id="L888" title="All 2 branches missed.">			if ( mipMapTransform != null )</span>
+<span class="nc" id="L889">				mipMapTransform.set( mrImgLoader.getSetupImgLoader( vd.getViewSetupId() ).getMipmapTransforms()[ bestLevel ] );</span>
+
+<span class="nc" id="L891">			dsx /= fx;</span>
+<span class="nc" id="L892">			dsy /= fy;</span>
+<span class="nc" id="L893">			dsz /= fz;</span>
+
+<span class="nc bnc" id="L895" title="All 2 branches missed.">			if ( !transformOnly )</span>
+			{
+<span class="nc" id="L897">				input = mrImgLoader.getSetupImgLoader( vd.getViewSetupId() ).getImage( vd.getTimePointId(), bestLevel );</span>
+			}
+<span class="nc" id="L899">		}</span>
+		else
+		{
+<span class="nc bnc" id="L902" title="All 2 branches missed.">			if ( !transformOnly )</span>
+			{
+<span class="nc" id="L904">				input = imgLoader.getSetupImgLoader( vd.getViewSetupId() ).getImage( vd.getTimePointId() );</span>
+			}
+
+<span class="nc bnc" id="L907" title="All 2 branches missed.">			if ( mipMapTransform != null )</span>
+<span class="nc" id="L908">				mipMapTransform.identity();</span>
+		}
+
+<span class="nc bnc" id="L911" title="All 2 branches missed.">		if ( mipMapTransform != null )</span>
+		{
+			// the additional downsampling (performed below)
+<span class="nc" id="L914">			final AffineTransform3D additonalDS = new AffineTransform3D();</span>
+<span class="nc" id="L915">			additonalDS.set( dsx, 0.0, 0.0, 0.0, 0.0, dsy, 0.0, 0.0, 0.0, 0.0, dsz, 0.0 );</span>
+
+			// we need to concatenate since when correcting for the downsampling we first multiply by whatever
+			// the manual downsampling did, and just then by the scaling+offset of the HDF5
+			//
+			// Here is an example of what happens (note that the 0.5 pixel shift is not changed)
+			// HDF5 MipMap Transform   (2.0, 0.0, 0.0, 0.5, 0.0, 2.0, 0.0, 0.5, 0.0, 0.0, 2.0, 0.5)
+			// Additional Downsampling (4.0, 0.0, 0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0)
+			// Resulting model         (8.0, 0.0, 0.0, 0.5, 0.0, 8.0, 0.0, 0.5, 0.0, 0.0, 4.0, 0.5)
+<span class="nc" id="L924">			mipMapTransform.concatenate( additonalDS );</span>
+		}
+
+<span class="nc bnc" id="L927" title="All 2 branches missed.">		if ( !transformOnly )</span>
+		{
+<span class="nc bnc" id="L929" title="All 2 branches missed.">			if ( virtualDownsampling )</span>
+			{
+<span class="nc bnc" id="L931" title="All 2 branches missed.">				for ( ;dsx &gt; 1; dsx /= 2 )</span>
+<span class="nc" id="L932">					input = LazyDownsample2x.init( Views.extendBorder( input ), input, new FloatType(), DoGImgLib2.blockSize, 0 );</span>
+
+<span class="nc bnc" id="L934" title="All 2 branches missed.">				for ( ;dsy &gt; 1; dsy /= 2 )</span>
+<span class="nc" id="L935">					input = LazyDownsample2x.init( Views.extendBorder( input ), input, new FloatType(), DoGImgLib2.blockSize, 1 );</span>
+
+<span class="nc bnc" id="L937" title="All 2 branches missed.">				for ( ;dsz &gt; 1; dsz /= 2 )</span>
+<span class="nc" id="L938">					input = LazyDownsample2x.init( Views.extendBorder( input ), input, new FloatType(), DoGImgLib2.blockSize, 2 );</span>
+			}
+			else
+			{
+				// note: every pixel is read exactly once, therefore caching the virtual input would not give any advantages
+<span class="nc bnc" id="L943" title="All 2 branches missed.">				for ( ;dsx &gt; 1; dsx /= 2 )</span>
+<span class="nc" id="L944">					input = Downsample.simple2x( input, new boolean[]{ true, false, false } );</span>
+
+<span class="nc bnc" id="L946" title="All 2 branches missed.">				for ( ;dsy &gt; 1; dsy /= 2 )</span>
+<span class="nc" id="L947">					input = Downsample.simple2x( input, new boolean[]{ false, true, false } );</span>
+
+<span class="nc bnc" id="L949" title="All 2 branches missed.">				for ( ;dsz &gt; 1; dsz /= 2 )</span>
+<span class="nc" id="L950">					input = Downsample.simple2x( input, new boolean[]{ false, false, true } );</span>
+			}
+		}
+
+<span class="nc" id="L954">		return input;</span>
+	}
+
+	private static final boolean contains( final int i, final int[] values )
+	{
+<span class="nc bnc" id="L959" title="All 2 branches missed.">		for ( final int j : values )</span>
+<span class="nc bnc" id="L960" title="All 2 branches missed.">			if ( i == j )</span>
+<span class="nc" id="L961">				return true;</span>
+
+<span class="nc" id="L963">		return false;</span>
+	}
+
+	public static void main(final String... args)
+	{
+<span class="nc" id="L968">		System.out.println(Arrays.toString(args));</span>
+<span class="nc" id="L969">		System.exit(new CommandLine(new SparkInterestPointDetection()).execute(args));</span>
+<span class="nc" id="L970">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

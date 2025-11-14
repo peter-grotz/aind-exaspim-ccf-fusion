@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AbstractRegistration.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark.abstractcmdline</a> &gt; <span class="el_source">AbstractRegistration.java</span></div><h1>AbstractRegistration.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark.abstractcmdline;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+import mpicbg.models.AffineModel3D;
+import mpicbg.models.IdentityModel;
+import mpicbg.models.InterpolatedAffineModel3D;
+import mpicbg.models.Model;
+import mpicbg.models.RigidModel3D;
+import mpicbg.models.TranslationModel3D;
+import mpicbg.spim.data.SpimData;
+import mpicbg.spim.data.SpimDataException;
+import mpicbg.spim.data.sequence.ViewId;
+import net.preibisch.legacy.io.IOFunctions;
+import net.preibisch.mvrecon.fiji.plugin.interestpointregistration.parameters.BasicRegistrationParameters.OverlapType;
+import net.preibisch.mvrecon.fiji.plugin.interestpointregistration.parameters.BasicRegistrationParameters.RegistrationType;
+import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.AllToAll;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.AllToAllRange;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.IndividualTimepoints;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.PairwiseSetup;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.ReferenceTimepoint;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.grouping.Group;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.overlap.AllAgainstAllOverlap;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.overlap.OverlapDetection;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.overlap.SimpleBoundingBoxOverlap;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.range.TimepointRange;
+import picocli.CommandLine.Option;
+
+<span class="nc" id="L55">public abstract class AbstractRegistration extends AbstractSelectableViews</span>
+{
+	private static final long serialVersionUID = 6435121614117716228L;
+
+<span class="nc" id="L59">	public enum TransformationModel { TRANSLATION, RIGID, AFFINE };</span>
+<span class="nc" id="L60">	public enum RegularizationModel { NONE, IDENTITY, TRANSLATION, RIGID, AFFINE };</span>
+
+<span class="nc" id="L62">	@Option(names = { &quot;-rtp&quot;, &quot;--registrationTP&quot; }, description = &quot;time series registration type; TIMEPOINTS_INDIVIDUALLY (i.e. no registration across time), TO_REFERENCE_TIMEPOINT, ALL_TO_ALL or ALL_TO_ALL_WITH_RANGE (default: TIMEPOINTS_INDIVIDUALLY)&quot;)</span>
+	protected RegistrationType registrationTP = RegistrationType.TIMEPOINTS_INDIVIDUALLY;
+
+<span class="nc" id="L65">	@Option(names = { &quot;--referenceTP&quot; }, description = &quot;the reference timepoint if timepointAlign == REFERENCE (default: first timepoint)&quot;)</span>
+	protected Integer referenceTP = null;
+
+<span class="nc" id="L68">	@Option(names = { &quot;--rangeTP&quot; }, description = &quot;the range of timepoints if timepointAlign == ALL_TO_ALL_RANGE (default: 5)&quot;)</span>
+<span class="nc" id="L69">	protected Integer rangeTP = 5;</span>
+
+<span class="nc" id="L71">	@Option(names = { &quot;-tm&quot;, &quot;--transformationModel&quot; }, description = &quot;which transformation model to use; TRANSLATION, RIGID or AFFINE (default: AFFINE)&quot;)</span>
+	protected TransformationModel transformationModel = TransformationModel.AFFINE;
+
+<span class="nc" id="L74">	@Option(names = { &quot;-rm&quot;, &quot;--regularizationModel&quot; }, description = &quot;which regularization model to use; NONE, IDENTITY, TRANSLATION, RIGID or AFFINE (default: RIGID)&quot;)</span>
+	protected RegularizationModel regularizationModel = RegularizationModel.RIGID;
+
+<span class="nc" id="L77">	@Option(names = { &quot;--lambda&quot; }, description = &quot;lamdba to use for regularization model (default: 0.1)&quot;)</span>
+<span class="nc" id="L78">	protected Double regularizationLambda = 0.1;</span>
+
+	protected SpimData2 dataGlobal;
+	protected ArrayList&lt; ViewId &gt; viewIdsGlobal;
+
+	public void initRegistrationParameters() throws SpimDataException
+	{
+<span class="nc" id="L85">		this.dataGlobal = this.loadSpimData2();</span>
+
+<span class="nc bnc" id="L87" title="All 2 branches missed.">		if ( dataGlobal == null )</span>
+<span class="nc" id="L88">			throw new IllegalArgumentException( &quot;Couldn't load SpimData XMl project.&quot; );</span>
+
+<span class="nc" id="L90">		this.viewIdsGlobal = this.loadViewIds( dataGlobal );</span>
+
+<span class="nc bnc" id="L92" title="All 4 branches missed.">		if ( viewIdsGlobal == null || viewIdsGlobal.size() == 0 )</span>
+<span class="nc" id="L93">			throw new IllegalArgumentException( &quot;No ViewIds found.&quot; );</span>
+
+<span class="nc bnc" id="L95" title="All 2 branches missed.">		if ( this.referenceTP == null )</span>
+<span class="nc" id="L96">			this.referenceTP = viewIdsGlobal.get( 0 ).getTimePointId();</span>
+		else
+		{
+<span class="nc" id="L99">			final HashSet&lt; Integer &gt; timepointToProcess = </span>
+<span class="nc" id="L100">					new HashSet&lt;&gt;( SpimData2.getAllTimePointsSorted( dataGlobal, viewIdsGlobal ).stream().mapToInt( tp -&gt; tp.getId() ).boxed().collect(Collectors.toList()) );</span>
+
+<span class="nc bnc" id="L102" title="All 2 branches missed.">			if ( !timepointToProcess.contains( referenceTP ) )</span>
+<span class="nc" id="L103">				throw new IllegalArgumentException( &quot;Specified reference timepoint is not part of the ViewIds that are processed.&quot; );</span>
+		}
+
+<span class="nc bnc" id="L106" title="All 2 branches missed.">		if ( registrationTP == RegistrationType.TO_REFERENCE_TIMEPOINT )</span>
+<span class="nc" id="L107">			System.out.println( &quot;Reference timepoint = &quot; + this.referenceTP );</span>
+<span class="nc" id="L108">	}</span>
+
+	public static Model&lt; ? &gt; createModelInstance( TransformationModel transformationModel, RegularizationModel regularizationModel, double lambda )
+	{
+		// parse model
+		final Model&lt; ? &gt; tm, rm;
+
+<span class="nc bnc" id="L115" title="All 2 branches missed.">		if ( transformationModel == TransformationModel.TRANSLATION )</span>
+<span class="nc" id="L116">			tm = new TranslationModel3D();</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">		else if ( transformationModel == TransformationModel.RIGID )</span>
+<span class="nc" id="L118">			tm = new RigidModel3D();</span>
+		else
+<span class="nc" id="L120">			tm = new AffineModel3D();</span>
+
+		// parse regularizer
+<span class="nc bnc" id="L123" title="All 2 branches missed.">		if ( regularizationModel == RegularizationModel.NONE )</span>
+<span class="nc" id="L124">			rm = null;</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">		else if ( regularizationModel == RegularizationModel.IDENTITY )</span>
+<span class="nc" id="L126">			rm = new IdentityModel();</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">		else if ( regularizationModel == RegularizationModel.TRANSLATION )</span>
+<span class="nc" id="L128">			rm = new TranslationModel3D();</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">		else if ( regularizationModel == RegularizationModel.RIGID )</span>
+<span class="nc" id="L130">			rm = new RigidModel3D();</span>
+		else
+<span class="nc" id="L132">			rm = new AffineModel3D();</span>
+
+		final Model&lt; ? &gt; model;
+
+<span class="nc bnc" id="L136" title="All 2 branches missed.">		if ( rm == null )</span>
+<span class="nc" id="L137">			return tm;</span>
+		else
+<span class="nc" id="L139">			return new InterpolatedAffineModel3D( tm, rm, lambda );</span>
+	}
+
+	// TODO: move to multiview-reconstruction (AdvancedRegistrationParameters)
+	public static PairwiseSetup&lt; ViewId &gt; pairwiseSetupInstance(
+			final RegistrationType registrationType,
+			final List&lt; ViewId &gt; views,
+			final Set&lt; Group&lt; ViewId &gt; &gt; groups,
+			final int rangeTP,
+			final int referenceTP)
+	{
+<span class="nc bnc" id="L150" title="All 2 branches missed.">		if ( registrationType == RegistrationType.TIMEPOINTS_INDIVIDUALLY )</span>
+<span class="nc" id="L151">			return new IndividualTimepoints( views, groups );</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">		else if ( registrationType == RegistrationType.ALL_TO_ALL )</span>
+<span class="nc" id="L153">			return new AllToAll&lt;&gt;( views, groups );</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">		else if ( registrationType == RegistrationType.ALL_TO_ALL_WITH_RANGE )</span>
+<span class="nc" id="L155">			return new AllToAllRange&lt; ViewId, TimepointRange&lt; ViewId &gt; &gt;( views, groups, new TimepointRange&lt;&gt;( rangeTP ) );</span>
+		else
+<span class="nc" id="L157">			return new ReferenceTimepoint( views, groups, referenceTP );</span>
+	}
+
+
+	// TODO: move to multiview-reconstruction (Interest_Point_Registration)
+	public static void identifySubsets( final PairwiseSetup&lt; ViewId &gt; setup, final OverlapDetection&lt; ViewId &gt; overlapDetection )
+	{
+<span class="nc" id="L164">		IOFunctions.println( &quot;Defined pairs, removed &quot; + setup.definePairs().size() + &quot; redundant view pairs.&quot; );</span>
+<span class="nc" id="L165">		IOFunctions.println( &quot;Removed &quot; + setup.removeNonOverlappingPairs( overlapDetection ).size() + &quot; pairs because they do not overlap (Strategy='&quot; + overlapDetection.getClass().getSimpleName() + &quot;')&quot; );</span>
+<span class="nc" id="L166">		setup.reorderPairs();</span>
+<span class="nc" id="L167">		setup.detectSubsets();</span>
+<span class="nc" id="L168">		setup.sortSubsets();</span>
+<span class="nc" id="L169">		IOFunctions.println( &quot;Identified &quot; + setup.getSubsets().size() + &quot; subsets &quot; );</span>
+<span class="nc" id="L170">	}</span>
+
+	// TODO: move to multiview-reconstruction (BasicRegistrationParameters)
+	public static OverlapDetection&lt; ViewId &gt; getOverlapDetection( final SpimData spimData, final OverlapType overlapType )
+	{
+<span class="nc bnc" id="L175" title="All 2 branches missed.">		if ( overlapType == OverlapType.ALL_AGAINST_ALL )</span>
+<span class="nc" id="L176">			return new AllAgainstAllOverlap&lt;&gt;( 3 );</span>
+		else
+<span class="nc" id="L178">			return new SimpleBoundingBoxOverlap&lt;&gt;( spimData );</span>
+	}
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

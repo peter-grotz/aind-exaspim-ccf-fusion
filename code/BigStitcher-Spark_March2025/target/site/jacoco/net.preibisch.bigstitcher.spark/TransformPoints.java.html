@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>TransformPoints.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark</a> &gt; <span class="el_source">TransformPoints.java</span></div><h1>TransformPoints.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.Arrays;
+
+import mpicbg.spim.data.registration.ViewRegistration;
+import mpicbg.spim.data.sequence.ViewId;
+import net.imglib2.realtransform.AffineTransform3D;
+import net.imglib2.util.Util;
+import net.preibisch.bigstitcher.spark.abstractcmdline.AbstractBasic;
+import net.preibisch.bigstitcher.spark.util.Import;
+import net.preibisch.legacy.io.TextFileAccess;
+import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.boundingbox.BoundingBox;
+import net.preibisch.mvrecon.process.boundingbox.BoundingBoxMaximal;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.grouping.Group;
+import picocli.CommandLine;
+import picocli.CommandLine.Option;
+
+<span class="nc" id="L44">public class TransformPoints extends AbstractBasic</span>
+{
+<span class="nc" id="L46">	@Option(names = { &quot;-vi&quot; }, required = true, description = &quot;specifically list the view id (time point id, view setup id) from which the transformation should be loaded, e.g. -vi '0,5' (timepoint 0, viewsetup 5)&quot;)</span>
+	protected String vi = null;
+
+<span class="nc" id="L49">	@Option(names = { &quot;--csvIn&quot; }, description = &quot;path to a comma separated file (x,y,z) from which points will be loaded (e.g. /home/jimmy/mypoints.csv)&quot;)</span>
+	private String csvIn = null;
+
+<span class="nc" id="L52">	@Option(names = { &quot;-p&quot; }, description = &quot;coordinates in 3d (e.g. -p 3.4,423.1,-12134.14142 -p 12.1,1.2,12.1)&quot;)</span>
+	private String p[] = null;
+
+	//@Option(names = { &quot;--zeroMin&quot; }, description = &quot;add code to set the minimal coordinate to 0,0,0&quot;)
+	//private boolean p[] = null;
+ 
+<span class="nc" id="L58">	@Option(names = { &quot;--csvOut&quot; }, description = &quot;path to a comma separated file (x,y,z) to which points will be saved. If ommited, it will go to stoud (printed out);(e.g. /home/jimmy/mypoints_transformed.csv)&quot;)</span>
+	private String csvOut = null;
+	
+	private static final long serialVersionUID = -7892604354139919145L;
+
+	@Override
+	public Void call() throws Exception
+	{
+		//System.out.println( &quot;-325.12  ,  3434.23&quot;.matches( &quot;[\\p{Space}*[-]*\\d+\\.?\\d*\\p{Space}*\\,?]+&quot;));
+		//System.exit( 0 );
+
+<span class="nc" id="L69">		final ArrayList&lt; double[] &gt; points = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L71" title="All 2 branches missed.">		if ( csvIn != null )</span>
+		{
+<span class="nc" id="L73">			final File f = new File( csvIn );</span>
+
+<span class="nc bnc" id="L75" title="All 2 branches missed.">			if ( !f.exists() )</span>
+			{
+<span class="nc" id="L77">				System.out.println( &quot;File '&quot; + f + &quot;' doesn't exist.&quot;);</span>
+<span class="nc" id="L78">				return null;</span>
+			}
+
+<span class="nc" id="L81">			System.out.println( &quot;Parsing '&quot; + f.getAbsolutePath() + &quot;'&quot;);</span>
+
+			try
+			{
+<span class="nc" id="L85">				final BufferedReader in = TextFileAccess.openFileRead( f.getAbsoluteFile() );</span>
+<span class="nc" id="L86">				in.lines().forEach( s -&gt; </span>
+				{
+<span class="nc bnc" id="L88" title="All 4 branches missed.">					if ( s.trim().length() &gt; 0 &amp;&amp; s.trim().matches( &quot;[\\p{Space}*[-]*\\d+\\.?\\d*\\p{Space}*\\,?]+&quot;) )</span>
+<span class="nc" id="L89">						points.add( Import.csvStringToDoubleArray( s.trim() ) );</span>
+					else
+<span class="nc" id="L91">						System.out.println( &quot;Ignoring line: &quot; + s );</span>
+<span class="nc" id="L92">				} );</span>
+<span class="nc" id="L93">				in.close();</span>
+			}
+<span class="nc" id="L95">			catch ( Exception e )</span>
+			{
+<span class="nc" id="L97">				System.out.println( &quot;Error parsing CSV file '&quot; + f + &quot;': &quot; + e);</span>
+<span class="nc" id="L98">				return null;</span>
+<span class="nc" id="L99">			}</span>
+		}
+
+<span class="nc bnc" id="L102" title="All 2 branches missed.">		if ( p != null )</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">			for ( final String point : p )</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">				if ( point.trim().length() &gt; 0 ) points.add( Import.csvStringToDoubleArray( point ) ); </span>
+
+<span class="nc bnc" id="L106" title="All 2 branches missed.">		if ( points.size() == 0 )</span>
+		{
+<span class="nc" id="L108">			System.err.println( &quot;No points defined (use either --csv and/or -p), stopping.&quot;);</span>
+<span class="nc" id="L109">			return null;</span>
+		}
+
+		// load transfromation
+<span class="nc" id="L113">		final SpimData2 data = this.loadSpimData2();</span>
+
+<span class="nc bnc" id="L115" title="All 2 branches missed.">		if ( data == null )</span>
+<span class="nc" id="L116">			return null;</span>
+
+<span class="nc" id="L118">		BoundingBox bb = new BoundingBoxMaximal( Import.getViewIds( data ), data ).estimate( &quot;Max bounding box.&quot; );</span>
+<span class="nc" id="L119">		System.out.println( &quot;Full bounding for acquisition: &quot; + Util.printInterval( bb ));</span>
+		
+<span class="nc" id="L121">		final ViewId view = Import.getViewId( vi );</span>
+
+<span class="nc" id="L123">		System.out.println( &quot;Using transformations of viewId: &quot; + Group.pvid( view ) );</span>
+
+<span class="nc" id="L125">		final ViewRegistration vr = data.getViewRegistrations().getViewRegistration( view );</span>
+<span class="nc" id="L126">		vr.updateModel();</span>
+<span class="nc" id="L127">		final AffineTransform3D model = vr.getModel();</span>
+
+		// apply transformations
+<span class="nc" id="L130">		System.out.println( &quot;Applying 3d affine: &quot; + model );</span>
+
+<span class="nc bnc" id="L132" title="All 2 branches missed.">		for ( final double[] point : points )</span>
+<span class="nc" id="L133">			model.apply( point, point );</span>
+
+		// save file or print out
+<span class="nc" id="L136">		PrintWriter out = null;</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">		if ( csvOut != null )</span>
+		{
+<span class="nc" id="L139">			final File f = new File( csvOut );</span>
+<span class="nc" id="L140">			System.out.println( &quot;Writing to '&quot; + f.getAbsolutePath() + &quot;'&quot;);</span>
+<span class="nc" id="L141">			out = TextFileAccess.openFileWrite( f );</span>
+		}
+
+<span class="nc bnc" id="L144" title="All 2 branches missed.">		for ( final double[] point : points )</span>
+		{
+<span class="nc" id="L146">			String text = point[0] + &quot;,&quot; + point[1] + &quot;,&quot; + point[2];</span>
+
+<span class="nc bnc" id="L148" title="All 2 branches missed.">			if ( out == null )</span>
+<span class="nc" id="L149">				System.out.println( text );</span>
+			else
+<span class="nc" id="L151">				out.println( text );</span>
+<span class="nc" id="L152">		}</span>
+
+<span class="nc bnc" id="L154" title="All 2 branches missed.">		if ( out != null )</span>
+<span class="nc" id="L155">			out.close();</span>
+
+<span class="nc" id="L157">		return null;</span>
+	}
+
+//	private double[] parse(// final )
+	public static void main(final String... args)
+	{
+<span class="nc" id="L163">		System.out.println(Arrays.toString(args));</span>
+<span class="nc" id="L164">		System.exit(new CommandLine(new TransformPoints()).execute(args));</span>
+<span class="nc" id="L165">	}</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

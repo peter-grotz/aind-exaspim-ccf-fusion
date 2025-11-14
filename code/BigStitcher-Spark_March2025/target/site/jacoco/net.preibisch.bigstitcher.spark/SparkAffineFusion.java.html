@@ -1,0 +1,639 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SparkAffineFusion.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark</a> &gt; <span class="el_source">SparkAffineFusion.java</span></div><h1>SparkAffineFusion.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark;
+
+import java.io.Serializable;
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.janelia.saalfeldlab.n5.DataType;
+import org.janelia.saalfeldlab.n5.N5Exception;
+import org.janelia.saalfeldlab.n5.N5FSWriter;
+import org.janelia.saalfeldlab.n5.N5Writer;
+import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
+import org.janelia.saalfeldlab.n5.universe.N5Factory.StorageFormat;
+
+import mpicbg.spim.data.SpimDataException;
+import mpicbg.spim.data.sequence.SequenceDescription;
+import mpicbg.spim.data.sequence.ViewDescription;
+import mpicbg.spim.data.sequence.ViewId;
+import net.imglib2.FinalInterval;
+import net.imglib2.Interval;
+import net.imglib2.RandomAccessible;
+import net.imglib2.RandomAccessibleInterval;
+import net.imglib2.converter.Converter;
+import net.imglib2.converter.RealUnsignedByteConverter;
+import net.imglib2.converter.RealUnsignedShortConverter;
+import net.imglib2.realtransform.AffineTransform3D;
+import net.imglib2.type.NativeType;
+import net.imglib2.type.Type;
+import net.imglib2.type.numeric.RealType;
+import net.imglib2.type.numeric.integer.UnsignedByteType;
+import net.imglib2.type.numeric.integer.UnsignedShortType;
+import net.imglib2.type.numeric.real.FloatType;
+import net.imglib2.util.Intervals;
+import net.imglib2.util.Util;
+import net.imglib2.view.Views;
+import net.preibisch.bigstitcher.spark.abstractcmdline.AbstractInfrastructure;
+import net.preibisch.bigstitcher.spark.abstractcmdline.AbstractSelectableViews;
+import net.preibisch.bigstitcher.spark.fusion.GenerateComputeBlockMasks;
+import net.preibisch.bigstitcher.spark.fusion.OverlappingBlocks;
+import net.preibisch.bigstitcher.spark.fusion.OverlappingViews;
+import net.preibisch.bigstitcher.spark.util.Import;
+import net.preibisch.bigstitcher.spark.util.N5Util;
+import net.preibisch.bigstitcher.spark.util.Spark;
+import net.preibisch.mvrecon.fiji.plugin.fusion.FusionGUI.FusionType;
+import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.boundingbox.BoundingBox;
+import net.preibisch.mvrecon.process.fusion.blk.BlkAffineFusion;
+import net.preibisch.mvrecon.process.fusion.transformed.TransformVirtual;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.grouping.Group;
+import net.preibisch.mvrecon.process.n5api.N5ApiTools;
+import net.preibisch.mvrecon.process.n5api.N5ApiTools.MultiResolutionLevelInfo;
+import picocli.CommandLine;
+import picocli.CommandLine.Option;
+import util.Grid;
+import util.URITools;
+
+<span class="nc" id="L87">public class SparkAffineFusion extends AbstractInfrastructure implements Callable&lt;Void&gt;, Serializable</span>
+{
+<span class="nc" id="L89">	public static enum DataTypeFusion</span>
+	{
+<span class="nc" id="L91">		UINT8, UINT16, FLOAT32</span>
+	}
+
+	private static final long serialVersionUID = -6103761116219617153L;
+
+<span class="nc" id="L96">	@Option(names = { &quot;-o&quot;, &quot;--n5Path&quot; }, required = true, description = &quot;N5/ZARR/HDF5 basse path for saving (must be combined with the option '-d' or '--bdv'), e.g. -o /home/fused.n5 or e.g. s3://myBucket/data.n5&quot;)</span>
+	private String outputPathURIString = null;
+
+<span class="nc" id="L99">	@Option(names = {&quot;-s&quot;, &quot;--storage&quot;}, description = &quot;Dataset storage type, can be used to override guessed format (default: guess from file/directory-ending)&quot;)</span>
+	private StorageFormat storageType = null;
+
+<span class="nc" id="L102">	@Option(names = &quot;--blockScale&quot;, description = &quot;how many blocks to use for a single processing step, e.g. 4,4,1 means for blockSize a 128,128,64 that each spark thread writes 512,512,64 (default: 2,2,1)&quot;)</span>
+	private String blockScaleString = &quot;2,2,1&quot;;
+
+<span class="nc" id="L105">	@Option(names = { &quot;--masks&quot; }, description = &quot;save only the masks (this will not fuse the images)&quot;)</span>
+	private boolean masks = false;
+
+<span class="nc" id="L108">	@Option(names = &quot;--maskOffset&quot;, description = &quot;allows to make masks larger (+, the mask will include some background) or smaller (-, some fused content will be cut off), warning: in the non-isotropic coordinate space of the raw input images (default: 0.0,0.0,0.0)&quot;)</span>
+	private String maskOffset = &quot;0.0,0.0,0.0&quot;;
+
+<span class="nc" id="L111">	@Option(names = { &quot;--firstTileWins&quot; }, description = &quot;use firstTileWins fusion strategy, with lowest ViewIds winning (default: false - using weighted average blending fusion)&quot;)</span>
+	private boolean firstTileWins = false;
+
+<span class="nc" id="L114">	@Option(names = { &quot;--firstTileWinsInverse&quot; }, description = &quot;use firstTileWins fusion strategy, with highest ViewIds winning (default: false - using weighted average blending fusion)&quot;)</span>
+	private boolean firstTileWinsInverse = false;
+
+
+<span class="nc" id="L118">	@Option(names = { &quot;-t&quot;, &quot;--timepointIndex&quot; }, description = &quot;specify a specific timepoint index of the output container that should be fused, usually you would also specify what --angleId, --tileId, ... or ViewIds -vi are being fused.&quot;)</span>
+	private Integer timepointIndex = null;
+
+<span class="nc" id="L121">	@Option(names = { &quot;-c&quot;, &quot;--channelIndex&quot; }, description = &quot;specify a specific channel index of the output container that should be fused, usually you would also specify what --angleId, --tileId, ... or ViewIds -vi are being fused.&quot;)</span>
+	private Integer channelIndex = null;
+
+
+	// To specify what goes into the current 3D volume
+<span class="nc" id="L126">	@Option(names = { &quot;--angleId&quot; }, description = &quot;list the angle ids that should be processed, you can find them in the XML, e.g. --angleId '0,1,2' (default: all angles)&quot;)</span>
+	protected String angleIds = null;
+
+<span class="nc" id="L129">	@Option(names = { &quot;--tileId&quot; }, description = &quot;list the tile ids that should be processed, you can find them in the XML, e.g. --tileId '0,1,2' (default: all tiles)&quot;)</span>
+	protected String tileIds = null;
+
+<span class="nc" id="L132">	@Option(names = { &quot;--illuminationId&quot; }, description = &quot;list the illumination ids that should be processed, you can find them in the XML, e.g. --illuminationId '0,1,2' (default: all illuminations)&quot;)</span>
+	protected String illuminationIds = null;
+
+<span class="nc" id="L135">	@Option(names = { &quot;--channelId&quot; }, description = &quot;list the channel ids that should be processed, you can find them in the XML (usually just one when fusing), e.g. --channelId '0,1,2' (default: all channels)&quot;)</span>
+	protected String channelIds = null;
+
+<span class="nc" id="L138">	@Option(names = { &quot;--timepointId&quot; }, description = &quot;list the timepoint ids that should be processed, you can find them in the XML (usually just one when fusing), e.g. --timepointId '0,1,2' (default: all time points)&quot;)</span>
+	protected String timepointIds = null;
+
+<span class="nc" id="L141">	@Option(names = { &quot;-vi&quot; }, description = &quot;specifically list the view ids (time point, view setup) that should be fused into a single image, e.g. -vi '0,0' -vi '0,1' (default: all view ids)&quot;)</span>
+	protected String[] vi = null;
+
+<span class="nc" id="L144">	@Option(names = { &quot;--prefetch&quot; }, description = &quot;prefetch all blocks required for fusion in each Spark job using unlimited threads, useful in cloud environments (default: false)&quot;)</span>
+	protected boolean prefetch = false;
+
+<span class="nc" id="L147">	URI outPathURI = null;</span>
+	/**
+	 * Prefetching now works with a Executors.newCachedThreadPool();
+	 */
+	//static final int N_PREFETCH_THREADS = 72;
+
+	@Override
+	public Void call() throws Exception
+	{
+<span class="nc" id="L156">		this.setRegion();</span>
+
+<span class="nc bnc" id="L158" title="All 2 branches missed.">		if (dryRun)</span>
+		{
+<span class="nc" id="L160">			System.out.println( &quot;dry-run not supported for affine fusion.&quot;);</span>
+<span class="nc" id="L161">			return null;</span>
+		}
+
+<span class="nc bnc" id="L164" title="All 4 branches missed.">		if ( firstTileWins &amp;&amp; firstTileWinsInverse )</span>
+		{
+<span class="nc" id="L166">			System.out.println( &quot;You can only choose one of the two firstTileWins or firstTileWinsInverse.&quot;);</span>
+<span class="nc" id="L167">			return null;</span>
+		}
+
+<span class="nc bnc" id="L170" title="All 8 branches missed.">		if ( timepointIndex != null &amp;&amp; channelIndex == null || timepointIndex == null &amp;&amp; channelIndex != null )</span>
+		{
+<span class="nc" id="L172">			System.out.println( &quot;You have to specify timepointId and channelId together, one alone does not work. timepointId =&quot; + timepointIndex + &quot;, channelId=&quot; + channelIndex );</span>
+<span class="nc" id="L173">			return null;</span>
+		}
+
+<span class="nc bnc" id="L176" title="All 14 branches missed.">		if ( timepointIndex == null &amp;&amp; ( vi != null || timepointIds != null || channelIds != null || illuminationIds != null || tileIds != null || angleIds != null ) )</span>
+			
+		{
+<span class="nc" id="L179">			System.out.println( &quot;You can only specify specify angles, tiles, ..., ViewIds if you provided a specific timepointIndex &amp; channelIndex.&quot;);</span>
+<span class="nc" id="L180">			return null;</span>
+		}
+	
+<span class="nc" id="L183">		this.outPathURI = URITools.toURI( outputPathURIString );</span>
+<span class="nc" id="L184">		System.out.println( &quot;Fused volume: &quot; + outPathURI );</span>
+
+<span class="nc bnc" id="L186" title="All 2 branches missed.">		if ( storageType == null )</span>
+		{
+<span class="nc bnc" id="L188" title="All 2 branches missed.">			if ( outputPathURIString.toLowerCase().endsWith( &quot;.zarr&quot; ) )</span>
+<span class="nc" id="L189">				storageType = StorageFormat.ZARR;</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">			else if ( outputPathURIString.toLowerCase().endsWith( &quot;.n5&quot; ) )</span>
+<span class="nc" id="L191">				storageType = StorageFormat.N5;</span>
+<span class="nc bnc" id="L192" title="All 4 branches missed.">			else if ( outputPathURIString.toLowerCase().endsWith( &quot;.h5&quot; ) || outPathURI.toString().toLowerCase().endsWith( &quot;.hdf5&quot; ) )</span>
+<span class="nc" id="L193">				storageType = StorageFormat.HDF5;</span>
+			else
+			{
+<span class="nc" id="L196">				System.out.println( &quot;Unable to guess format from URI '&quot; + outPathURI + &quot;', please specify using '-s'&quot;);</span>
+<span class="nc" id="L197">				return null;</span>
+			}
+
+<span class="nc" id="L200">			System.out.println( &quot;Guessed format &quot; + storageType + &quot; will be used to open URI '&quot; + outPathURI + &quot;', you can override it using '-s'&quot;);</span>
+		}
+		else
+		{
+<span class="nc" id="L204">			System.out.println( &quot;Format &quot; + storageType + &quot; will be used to open &quot; + outPathURI );</span>
+		}
+
+<span class="nc" id="L207">		final N5Writer driverVolumeWriter = N5Util.createN5Writer( outPathURI, storageType );</span>
+
+<span class="nc" id="L209">		final String fusionFormat = driverVolumeWriter.getAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/FusionFormat&quot;, String.class );</span>
+
+<span class="nc" id="L211">		final boolean bdv = fusionFormat.toLowerCase().contains( &quot;BDV&quot; );</span>
+
+<span class="nc" id="L213">		final URI xmlURI = driverVolumeWriter.getAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/InputXML&quot;, URI.class );</span>
+
+		final int numTimepoints, numChannels;
+
+<span class="nc bnc" id="L217" title="All 2 branches missed.">		if ( timepointIndex == null )</span>
+		{
+<span class="nc" id="L219">			numTimepoints = driverVolumeWriter.getAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/NumTimepoints&quot;, int.class );</span>
+<span class="nc" id="L220">			numChannels = driverVolumeWriter.getAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/NumChannels&quot;, int.class );</span>
+		}
+		else
+		{
+<span class="nc" id="L224">			System.out.println( &quot;Overriding numChannels and numTimepoints from metadata, instead processing timepointIndex=&quot; + timepointIndex + &quot;, channelIndex=&quot; + channelIndex + &quot; only.&quot;);</span>
+<span class="nc" id="L225">			numTimepoints = numChannels = 1;</span>
+		}
+
+<span class="nc" id="L228">		final long[] bbMin = driverVolumeWriter.getAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/Boundingbox_min&quot;, long[].class );</span>
+<span class="nc" id="L229">		final long[] bbMax = driverVolumeWriter.getAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/Boundingbox_max&quot;, long[].class );</span>
+ 
+<span class="nc" id="L231">		final BoundingBox boundingBox = new BoundingBox( new FinalInterval( bbMin, bbMax ) );</span>
+
+<span class="nc" id="L233">		final boolean preserveAnisotropy = driverVolumeWriter.getAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/PreserveAnisotropy&quot;, boolean.class );</span>
+<span class="nc" id="L234">		final double anisotropyFactor = driverVolumeWriter.getAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/AnisotropyFactor&quot;, double.class );</span>
+<span class="nc" id="L235">		final int[] blockSize = driverVolumeWriter.getAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/BlockSize&quot;, int[].class );</span>
+
+<span class="nc" id="L237">		final DataType dataType = driverVolumeWriter.getAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/DataType&quot;, DataType.class );</span>
+
+<span class="nc" id="L239">		System.out.println( &quot;FusionFormat: &quot; + fusionFormat );</span>
+<span class="nc" id="L240">		System.out.println( &quot;Input XML: &quot; + xmlURI );</span>
+<span class="nc" id="L241">		System.out.println( &quot;BDV project: &quot; + bdv );</span>
+<span class="nc" id="L242">		System.out.println( &quot;numTimepoints of fused dataset(s): &quot; + numTimepoints );</span>
+<span class="nc" id="L243">		System.out.println( &quot;numChannels of fused dataset(s): &quot; + numChannels );</span>
+<span class="nc" id="L244">		System.out.println( &quot;BoundingBox: &quot; + boundingBox );</span>
+<span class="nc" id="L245">		System.out.println( &quot;preserveAnisotropy: &quot; + preserveAnisotropy );</span>
+<span class="nc" id="L246">		System.out.println( &quot;anisotropyFactor: &quot; + anisotropyFactor );</span>
+<span class="nc" id="L247">		System.out.println( &quot;blockSize: &quot; + Arrays.toString( blockSize ) );</span>
+<span class="nc" id="L248">		System.out.println( &quot;dataType: &quot; + dataType );</span>
+
+<span class="nc" id="L250">		double minI = Double.NaN, maxI = Double.NaN;</span>
+		try
+		{
+<span class="nc" id="L253">			minI = driverVolumeWriter.getAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/MinIntensity&quot;, double.class );</span>
+<span class="nc" id="L254">			maxI = driverVolumeWriter.getAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/MaxIntensity&quot;, double.class );</span>
+		}
+<span class="nc" id="L256">		catch ( Exception e )</span>
+		{
+<span class="nc" id="L258">			System.out.println( &quot;Min/Max intensity not stored.&quot; );</span>
+<span class="nc" id="L259">		}</span>
+
+<span class="nc" id="L261">		final double minIntensity = minI;</span>
+<span class="nc" id="L262">		final double maxIntensity = maxI;</span>
+
+<span class="nc" id="L264">		System.out.println( &quot;minIntensity: &quot; + minI );</span>
+<span class="nc" id="L265">		System.out.println( &quot;maxIntensity: &quot; + maxI );</span>
+
+<span class="nc" id="L267">		final MultiResolutionLevelInfo[][] mrInfos =</span>
+<span class="nc" id="L268">				driverVolumeWriter.getAttribute( &quot;/&quot;, &quot;Bigstitcher-Spark/MultiResolutionInfos&quot;, MultiResolutionLevelInfo[][].class );</span>
+
+<span class="nc" id="L270">		System.out.println( &quot;Loaded &quot; + mrInfos.length + &quot; metadata object for fused &quot; + storageType + &quot; volume(s)&quot; );</span>
+
+<span class="nc" id="L272">		final double[] maskOff = Import.csvStringToDoubleArray(maskOffset);</span>
+
+<span class="nc" id="L274">		final SpimData2 dataGlobal = Spark.getJobSpimData2( xmlURI, 0 );</span>
+
+<span class="nc bnc" id="L276" title="All 2 branches missed.">		if ( dataGlobal == null )</span>
+<span class="nc" id="L277">			return null;</span>
+
+		final ArrayList&lt; ViewId &gt; viewIdsGlobal;
+
+<span class="nc" id="L281">		if (</span>
+<span class="nc bnc" id="L282" title="All 2 branches missed.">			dataGlobal.getSequenceDescription().getAllChannelsOrdered().size() != numChannels || </span>
+<span class="nc bnc" id="L283" title="All 2 branches missed.">			dataGlobal.getSequenceDescription().getTimePoints().getTimePointsOrdered().size() != numTimepoints )</span>
+		{
+<span class="nc" id="L285">			System.out.println(</span>
+					&quot;The number of channels and timepoint in XML does not match the number in the export dataset.&quot;
+					+ &quot;You have to specify which ViewIds/Channels/Illuminations/Tiles/Angles/Timepoints should be fused into&quot;
+					+ &quot;a specific 3D volume in the fusion dataset:&quot;);
+
+<span class="nc" id="L290">			viewIdsGlobal = AbstractSelectableViews.loadViewIds( dataGlobal, vi, angleIds, channelIds, illuminationIds, tileIds, timepointIds  );</span>
+
+<span class="nc bnc" id="L292" title="All 4 branches missed.">			if ( viewIdsGlobal == null || viewIdsGlobal.size() == 0 )</span>
+<span class="nc" id="L293">				return null;</span>
+		}
+		else
+		{
+<span class="nc" id="L297">			viewIdsGlobal = Import.getViewIds( dataGlobal );</span>
+		}
+
+<span class="nc" id="L300">		final int[] blocksPerJob = Import.csvStringToIntArray(blockScaleString);</span>
+<span class="nc" id="L301">		System.out.println( &quot;Fusing: &quot; + boundingBox.getTitle() + &quot;: &quot; + Util.printInterval( boundingBox ) +</span>
+<span class="nc" id="L302">				&quot; with blocksize &quot; + Util.printCoordinates( blockSize ) + &quot; and &quot; + Util.printCoordinates( blocksPerJob ) + &quot; blocks per job&quot; );</span>
+
+<span class="nc bnc" id="L304" title="All 2 branches missed.">		if ( dataType == DataType.UINT8 )</span>
+<span class="nc" id="L305">			System.out.println( &quot;Fusing to UINT8, min intensity = &quot; + minIntensity + &quot;, max intensity = &quot; + maxIntensity );</span>
+<span class="nc bnc" id="L306" title="All 2 branches missed.">		else if ( dataType == DataType.UINT16 )</span>
+<span class="nc" id="L307">			System.out.println( &quot;Fusing to UINT16, min intensity = &quot; + minIntensity + &quot;, max intensity = &quot; + maxIntensity );</span>
+		else
+<span class="nc" id="L309">			System.out.println( &quot;Fusing to FLOAT32&quot; );</span>
+
+		//
+		// final variables for Spark
+		//
+<span class="nc" id="L314">		final long[] dimensions = boundingBox.dimensionsAsLongArray();</span>
+
+		// TODO: do we still need this?
+		try
+		{
+			// trigger the N5-blosc error, because if it is triggered for the first
+			// time inside Spark, everything crashes
+<span class="nc" id="L321">			new N5FSWriter(null);</span>
+		}
+<span class="nc" id="L323">		catch (Exception e ) {}</span>
+
+<span class="nc" id="L325">		final SparkConf conf = new SparkConf().setAppName(&quot;AffineFusion&quot;);</span>
+
+<span class="nc bnc" id="L327" title="All 2 branches missed.">		if (localSparkBindAddress)</span>
+<span class="nc" id="L328">			conf.set(&quot;spark.driver.bindAddress&quot;, &quot;127.0.0.1&quot;);</span>
+
+<span class="nc" id="L330">		final JavaSparkContext sc = new JavaSparkContext(conf);</span>
+<span class="nc" id="L331">		sc.setLogLevel(&quot;ERROR&quot;);</span>
+
+<span class="nc" id="L333">		final SequenceDescription sd = dataGlobal.getSequenceDescription();</span>
+
+<span class="nc" id="L335">		final HashMap&lt; Integer, Integer &gt; tpIdToTpIndex = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L336">		final HashMap&lt; Integer, Integer &gt; chIdToChIndex = new HashMap&lt;&gt;();</span>
+
+<span class="nc bnc" id="L338" title="All 2 branches missed.">		for ( int t = 0; t &lt; sd.getTimePoints().getTimePointsOrdered().size(); ++t )</span>
+<span class="nc" id="L339">			tpIdToTpIndex.put( sd.getTimePoints().getTimePointsOrdered().get( t ).getId(), t );</span>
+
+<span class="nc bnc" id="L341" title="All 2 branches missed.">		for ( int c = 0; c &lt; sd.getAllChannelsOrdered().size(); ++c )</span>
+<span class="nc" id="L342">			chIdToChIndex.put( sd.getAllChannelsOrdered().get( c ).getId(), c );</span>
+
+<span class="nc" id="L344">		final long totalTime = System.currentTimeMillis();</span>
+
+<span class="nc bnc" id="L346" title="All 2 branches missed.">		for ( int c = 0; c &lt; numChannels; ++c )</span>
+<span class="nc bnc" id="L347" title="All 2 branches missed.">			for ( int t = 0; t &lt; numTimepoints; ++t )</span>
+			{
+<span class="nc bnc" id="L349" title="All 2 branches missed.">				final int tIndex = (timepointIndex == null) ? t : timepointIndex;</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">				final int cIndex = (channelIndex == null) ? c : channelIndex;</span>
+
+<span class="nc" id="L352">				System.out.println( &quot;\nProcessing channel &quot; + cIndex + &quot;, timepoint &quot; + tIndex );</span>
+<span class="nc" id="L353">				System.out.println( &quot;-----------------------------------&quot; );</span>
+
+<span class="nc" id="L355">				final ArrayList&lt; ViewId &gt; viewIds = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L356">				viewIdsGlobal.forEach( viewId -&gt; {</span>
+<span class="nc" id="L357">					final ViewDescription vd = sd.getViewDescription( viewId );</span>
+
+<span class="nc bnc" id="L359" title="All 6 branches missed.">					if ( timepointIndex != null || tpIdToTpIndex.get( vd.getTimePointId() ) == tIndex &amp;&amp; chIdToChIndex.get( vd.getViewSetup().getChannel().getId() ) == cIndex )</span>
+<span class="nc" id="L360">						viewIds.add( new ViewId( viewId.getTimePointId(), viewId.getViewSetupId() ) );</span>
+<span class="nc" id="L361">				});</span>
+
+<span class="nc bnc" id="L363" title="All 2 branches missed.">				if ( masks )</span>
+<span class="nc" id="L364">					System.out.println( &quot;Creating masks for &quot; + viewIds.size() + &quot; views of this 3D volume ... &quot; );</span>
+				else
+<span class="nc" id="L366">					System.out.println( &quot;Fusing &quot; + viewIds.size() + &quot; views for this 3D volume ... &quot; );</span>
+
+<span class="nc" id="L368">				viewIds.forEach( vd -&gt; System.out.println( Group.pvid( vd ) ) );</span>
+				final MultiResolutionLevelInfo[] mrInfo;
+
+<span class="nc bnc" id="L371" title="All 2 branches missed.">				if ( storageType == StorageFormat.ZARR )</span>
+<span class="nc" id="L372">					mrInfo = mrInfos[ 0 ];</span>
+				else
+<span class="nc" id="L374">					mrInfo = mrInfos[ cIndex + tIndex*numChannels ];</span>
+
+				// using bigger blocksizes than being stored for efficiency (needed for very large datasets)
+<span class="nc" id="L377">				final int[] computeBlockSize = new int[ 3 ];</span>
+<span class="nc" id="L378">				Arrays.setAll( computeBlockSize, d -&gt; blockSize[ d ] * blocksPerJob[ d ] );</span>
+<span class="nc" id="L379">				final List&lt;long[][]&gt; grid = Grid.create(dimensions,</span>
+						computeBlockSize,
+						blockSize);
+
+<span class="nc" id="L383">				System.out.println( &quot;numJobs = &quot; + grid.size() );</span>
+
+				//driverVolumeWriter.setAttribute( n5Dataset, &quot;offset&quot;, minBB );
+
+<span class="nc" id="L387">				final JavaRDD&lt;long[][]&gt; rdd = sc.parallelize( grid ).repartition( Math.min( Spark.maxPartitions, grid.size() ) );</span>
+
+<span class="nc" id="L389">				long time = System.currentTimeMillis();</span>
+
+<span class="nc" id="L391">				rdd.foreach(</span>
+						gridBlock -&gt;
+						{
+<span class="nc" id="L394">							final SpimData2 dataLocal = Spark.getSparkJobSpimData2(xmlURI);</span>
+
+<span class="nc" id="L396">							final HashMap&lt; ViewId, AffineTransform3D &gt; registrations =</span>
+<span class="nc" id="L397">									TransformVirtual.adjustAllTransforms(</span>
+											viewIds,
+<span class="nc" id="L399">											dataLocal.getViewRegistrations().getViewRegistrations(),</span>
+											anisotropyFactor,
+											Double.NaN );
+
+							final Converter conv;
+							final Type type;
+							final boolean uint8, uint16;
+
+<span class="nc bnc" id="L407" title="All 2 branches missed.">							if ( dataType == DataType.UINT8 )</span>
+							{
+<span class="nc" id="L409">								conv = new RealUnsignedByteConverter&lt;&gt;( minIntensity, maxIntensity );</span>
+<span class="nc" id="L410">								type = new UnsignedByteType();</span>
+<span class="nc" id="L411">								uint8 = true;</span>
+<span class="nc" id="L412">								uint16 = false;</span>
+							}
+<span class="nc bnc" id="L414" title="All 2 branches missed.">							else if ( dataType == DataType.UINT16 )</span>
+							{
+<span class="nc" id="L416">								conv = new RealUnsignedShortConverter&lt;&gt;( minIntensity, maxIntensity );</span>
+<span class="nc" id="L417">								type = new UnsignedShortType();</span>
+<span class="nc" id="L418">								uint8 = false;</span>
+<span class="nc" id="L419">								uint16 = true;</span>
+							}
+							else
+							{
+<span class="nc" id="L423">								conv = null;</span>
+<span class="nc" id="L424">								type = new FloatType();</span>
+<span class="nc" id="L425">								uint8 = false;</span>
+<span class="nc" id="L426">								uint16 = false;</span>
+							}
+
+							// The min coordinates of the block that this job renders (in pixels)
+<span class="nc" id="L430">							final int n = gridBlock[ 0 ].length;</span>
+<span class="nc" id="L431">							final long[] superBlockOffset = new long[ n ];</span>
+<span class="nc" id="L432">							Arrays.setAll( superBlockOffset, d -&gt; gridBlock[ 0 ][ d ] + bbMin[ d ] );</span>
+
+							// The size of the block that this job renders (in pixels)
+<span class="nc" id="L435">							final long[] superBlockSize = gridBlock[ 1 ];</span>
+
+							//TODO: prefetchExecutor!!
+<span class="nc" id="L438">							final long[] fusedBlockMin = new long[ n ];</span>
+<span class="nc" id="L439">							final long[] fusedBlockMax = new long[ n ];</span>
+<span class="nc" id="L440">							final Interval fusedBlock = FinalInterval.wrap( fusedBlockMin, fusedBlockMax );</span>
+
+							// pre-filter views that overlap the superBlock
+<span class="nc" id="L443">							Arrays.setAll( fusedBlockMin, d -&gt; superBlockOffset[ d ] );</span>
+<span class="nc" id="L444">							Arrays.setAll( fusedBlockMax, d -&gt; superBlockOffset[ d ] + superBlockSize[ d ] - 1 );</span>
+
+<span class="nc" id="L446">							final List&lt; ViewId &gt; overlappingViews =</span>
+<span class="nc" id="L447">									OverlappingViews.findOverlappingViews( dataLocal, viewIds, registrations, fusedBlock );</span>
+
+							final RandomAccessibleInterval img;
+
+<span class="nc bnc" id="L451" title="All 2 branches missed.">							if ( masks )</span>
+							{
+<span class="nc" id="L453">								System.out.println( &quot;Creating masks for block: offset=&quot; + Util.printCoordinates( gridBlock[0] ) + &quot;, dimension=&quot; + Util.printCoordinates( gridBlock[1] ) );</span>
+
+<span class="nc" id="L455">								img = Views.zeroMin(</span>
+										new GenerateComputeBlockMasks(
+												dataLocal,
+												registrations,
+												overlappingViews,
+												bbMin,
+												bbMax,
+												uint8,
+												uint16,
+<span class="nc" id="L464">												maskOff ).call( gridBlock ) );</span>
+							}
+							else
+							{
+								//
+								// PREFETCHING, TODO: should be part of BlkAffineFusion.init
+								//
+<span class="nc" id="L471">								final OverlappingBlocks overlappingBlocks = OverlappingBlocks.find( dataLocal, overlappingViews, fusedBlock );</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">								if ( overlappingBlocks.overlappingViews().isEmpty() )</span>
+<span class="nc" id="L473">									return;</span>
+
+<span class="nc bnc" id="L475" title="All 2 branches missed.">								if ( prefetch )</span>
+								{
+<span class="nc" id="L477">									System.out.println( &quot;Prefetching: &quot; + overlappingBlocks.numPrefetchBlocks() + &quot; block(s) from &quot; + overlappingBlocks.overlappingViews().size() + &quot; overlapping view(s) in the input data.&quot; );</span>
+
+<span class="nc" id="L479">									final ExecutorService prefetchExecutor = Executors.newCachedThreadPool();</span>
+<span class="nc" id="L480">									overlappingBlocks.prefetch(prefetchExecutor);</span>
+<span class="nc" id="L481">									prefetchExecutor.shutdown();</span>
+								}
+
+<span class="nc" id="L484">								System.out.println( &quot;Fusing block: offset=&quot; + Util.printCoordinates( gridBlock[0] ) + &quot;, dimension=&quot; + Util.printCoordinates( gridBlock[1] ) );</span>
+
+								final FusionType fusionType;
+
+<span class="nc bnc" id="L488" title="All 2 branches missed.">								if ( firstTileWins )</span>
+<span class="nc" id="L489">									fusionType = FusionType.FIRST_LOW;</span>
+<span class="nc bnc" id="L490" title="All 2 branches missed.">								else if ( firstTileWinsInverse )</span>
+<span class="nc" id="L491">									fusionType = FusionType.FIRST_HIGH;</span>
+								else
+<span class="nc" id="L493">									fusionType = FusionType.AVG_BLEND;</span>
+
+								// returns a zero-min interval
+<span class="nc" id="L496">								img = BlkAffineFusion.init(</span>
+										conv,
+<span class="nc" id="L498">										dataLocal.getSequenceDescription().getImgLoader(),</span>
+										viewIds,
+										registrations,
+<span class="nc" id="L501">										dataLocal.getSequenceDescription().getViewDescriptions(),</span>
+										fusionType,//fusion.getFusionType(),
+										1, // linear interpolation
+										null, // intensity correction
+										new BoundingBox( new FinalInterval( bbMin, bbMax ) ),
+										(RealType &amp; NativeType)type,
+										blockSize );
+							}
+
+							final long[] blockOffset, blockSizeExport, gridOffset;
+
+							final RandomAccessible image;
+
+							// 5D OME-ZARR CONTAINER
+<span class="nc bnc" id="L515" title="All 2 branches missed.">							if ( storageType == StorageFormat.ZARR )</span>
+							{
+								// gridBlock is 3d, make it 5d
+<span class="nc" id="L518">								blockOffset = new long[] { gridBlock[0][0], gridBlock[0][1], gridBlock[0][2], cIndex, tIndex };</span>
+<span class="nc" id="L519">								blockSizeExport = new long[] { gridBlock[1][0], gridBlock[1][1], gridBlock[1][2], 1, 1 };</span>
+<span class="nc" id="L520">								gridOffset = new long[] { gridBlock[2][0], gridBlock[2][1], gridBlock[2][2], cIndex, tIndex }; // because blocksize in C &amp; T is 1</span>
+
+								// img is 3d, make it 5d
+								// the same information is returned no matter which index is queried in C and T
+<span class="nc" id="L524">								image = Views.addDimension( Views.addDimension( img ) );</span>
+							}
+							else
+							{
+<span class="nc" id="L528">								blockOffset = gridBlock[0];</span>
+<span class="nc" id="L529">								blockSizeExport = gridBlock[1];</span>
+<span class="nc" id="L530">								gridOffset = gridBlock[2];</span>
+
+<span class="nc" id="L532">								image = img;</span>
+							}
+
+<span class="nc" id="L535">							final Interval block =</span>
+<span class="nc" id="L536">									Intervals.translate(</span>
+											new FinalInterval( blockSizeExport ),
+											blockOffset );
+
+<span class="nc" id="L540">							final RandomAccessibleInterval source =</span>
+<span class="nc" id="L541">									Views.interval( image, block );</span>
+
+<span class="nc" id="L543">							final RandomAccessibleInterval sourceGridBlock =</span>
+<span class="nc" id="L544">									Views.offsetInterval(source, blockOffset, blockSizeExport);</span>
+
+<span class="nc" id="L546">							final N5Writer driverVolumeWriterLocal = N5Util.createN5Writer( outPathURI, storageType );</span>
+
+<span class="nc" id="L548">							N5Utils.saveBlock(sourceGridBlock, driverVolumeWriterLocal, mrInfo[ 0 ].dataset, gridOffset );</span>
+
+<span class="nc bnc" id="L550" title="All 2 branches missed.">							if ( N5Util.sharedHDF5Writer == null )</span>
+<span class="nc" id="L551">								driverVolumeWriterLocal.close();</span>
+<span class="nc" id="L552">						} );</span>
+
+<span class="nc" id="L554">				System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Saved full resolution, took: &quot; + (System.currentTimeMillis() - time ) + &quot; ms.&quot; );</span>
+
+				//
+				// save multiresolution pyramid (s1 ... sN)
+				//
+<span class="nc bnc" id="L559" title="All 2 branches missed.">				for ( int level = 1; level &lt; mrInfo.length; ++level )</span>
+				{
+<span class="nc" id="L561">					final int s = level;</span>
+
+<span class="nc" id="L563">					final List&lt;long[][]&gt; allBlocks = Grid.create(</span>
+							new long[] { mrInfo[ level ].dimensions[ 0 ], mrInfo[ level ].dimensions[ 1 ], mrInfo[ level ].dimensions[ 2 ] },
+							computeBlockSize,
+							blockSize);
+
+<span class="nc" id="L568">					System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Downsampling: &quot; + Util.printCoordinates( mrInfo[ level ].absoluteDownsampling ) + &quot; with relative downsampling of &quot; + Util.printCoordinates( mrInfo[ level ].relativeDownsampling ));</span>
+<span class="nc" id="L569">					System.out.println( new Date( System.currentTimeMillis() ) + &quot;: s&quot; + level + &quot; num blocks=&quot; + allBlocks.size() );</span>
+<span class="nc" id="L570">					System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Loading '&quot; + mrInfo[ level - 1 ].dataset + &quot;', downsampled will be written as '&quot; + mrInfo[ level ].dataset + &quot;'.&quot; );</span>
+
+<span class="nc" id="L572">					time = System.currentTimeMillis();</span>
+
+<span class="nc" id="L574">					final JavaRDD&lt;long[][]&gt; rddDS = sc.parallelize( allBlocks ).repartition( Math.min( Spark.maxPartitions, allBlocks.size() ) );</span>
+
+<span class="nc" id="L576">					rddDS.foreach(</span>
+							gridBlock -&gt;
+							{
+<span class="nc" id="L579">								final N5Writer driverVolumeWriterLocal = N5Util.createN5Writer( outPathURI, storageType );</span>
+
+								// 5D OME-ZARR CONTAINER
+<span class="nc bnc" id="L582" title="All 2 branches missed.">								if ( storageType == StorageFormat.ZARR )</span>
+								{
+<span class="nc" id="L584">									N5ApiTools.writeDownsampledBlock5dOMEZARR(</span>
+											driverVolumeWriterLocal,
+											mrInfo[ s ],
+											mrInfo[ s - 1 ],
+											gridBlock,
+											cIndex,
+											tIndex );
+								}
+								else
+								{
+<span class="nc" id="L594">									N5ApiTools.writeDownsampledBlock(</span>
+											driverVolumeWriterLocal,
+											mrInfo[ s ],
+											mrInfo[ s - 1 ],
+											gridBlock );
+								}
+
+<span class="nc bnc" id="L601" title="All 2 branches missed.">								if ( N5Util.sharedHDF5Writer == null )</span>
+<span class="nc" id="L602">									driverVolumeWriterLocal.close();</span>
+
+<span class="nc" id="L604">							});</span>
+
+<span class="nc" id="L606">					System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Saved level s &quot; + level + &quot;, took: &quot; + (System.currentTimeMillis() - time ) + &quot; ms.&quot; );</span>
+				}
+			}
+
+		// close main writer (is shared over Spark-threads if it's HDF5, thus just closing it here)
+<span class="nc" id="L611">		driverVolumeWriter.close();</span>
+
+		/*
+		if ( multiRes )
+			System.out.println( &quot;Saved, e.g. view with './n5-view -i &quot; + n5PathURI + &quot; -d &quot; + n5Dataset.substring( 0, n5Dataset.length() - 3) + &quot;'&quot; );
+		else
+			System.out.println( &quot;Saved, e.g. view with './n5-view -i &quot; + n5PathURI + &quot; -d &quot; + n5Dataset + &quot;'&quot; );
+		*/
+
+<span class="nc" id="L620">		System.out.println( &quot;done, took: &quot; + (System.currentTimeMillis() - totalTime ) + &quot; ms.&quot; );</span>
+
+<span class="nc" id="L622">		sc.close();</span>
+
+<span class="nc" id="L624">		return null;</span>
+	}
+
+	public static void main(final String... args) throws SpimDataException {
+
+		//final XmlIoSpimData io = new XmlIoSpimData();
+		//final SpimData spimData = io.load( &quot;/Users/preibischs/Documents/Microscopy/Stitching/Truman/standard/output/dataset.xml&quot; );
+		//BdvFunctions.show( spimData );
+		//SimpleMultiThreading.threadHaltUnClean();
+
+<span class="nc" id="L634">		System.out.println(Arrays.toString(args));</span>
+
+<span class="nc" id="L636">		System.exit(new CommandLine(new SparkAffineFusion()).execute(args));</span>
+<span class="nc" id="L637">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

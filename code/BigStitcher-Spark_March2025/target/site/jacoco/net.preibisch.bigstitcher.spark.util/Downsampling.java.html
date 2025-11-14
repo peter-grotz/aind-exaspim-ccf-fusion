@@ -1,0 +1,247 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Downsampling.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark.util</a> &gt; <span class="el_source">Downsampling.java</span></div><h1>Downsampling.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark.util;
+
+import java.net.URI;
+import java.util.Date;
+import java.util.List;
+
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.janelia.saalfeldlab.n5.Compression;
+import org.janelia.saalfeldlab.n5.DataType;
+import org.janelia.saalfeldlab.n5.N5Writer;
+import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
+import org.janelia.saalfeldlab.n5.universe.N5Factory.StorageFormat;
+
+import net.imglib2.FinalInterval;
+import net.imglib2.RandomAccessibleInterval;
+import net.imglib2.converter.Converters;
+import net.imglib2.type.numeric.integer.ShortType;
+import net.imglib2.type.numeric.integer.UnsignedByteType;
+import net.imglib2.type.numeric.integer.UnsignedShortType;
+import net.imglib2.type.numeric.real.FloatType;
+import net.imglib2.util.Util;
+import net.imglib2.view.Views;
+import net.preibisch.bigstitcher.spark.SparkAffineFusion;
+import net.preibisch.mvrecon.process.downsampling.lazy.LazyHalfPixelDownsample2x;
+import net.preibisch.mvrecon.process.n5api.N5ApiTools;
+import util.Grid;
+
+<span class="nc" id="L50">public class Downsampling</span>
+{
+	// TODO: this code is almost identical to the code in ExportN5API in multiview-reconstruction (except it's for multi-threading there)
+	public static boolean createDownsampling(
+			final URI path,
+			final String datasetS0,
+			final N5Writer driverVolumeWriter,
+			final long[] dimensionsS0,
+			final StorageFormat storageType,
+			final int[] blocksize,
+			final DataType datatype,
+			final Compression compression,
+			final int[][] downsamplings,
+			final boolean bdv,
+			final JavaSparkContext sc )
+	{
+<span class="nc" id="L66">		long[] previousDim = dimensionsS0;</span>
+<span class="nc" id="L67">		String previousDataset = datasetS0;</span>
+
+<span class="nc bnc" id="L69" title="All 2 branches missed.">		for ( int level = 1; level &lt; downsamplings.length; ++level )</span>
+		{
+<span class="nc" id="L71">			final int[] ds = new int[ downsamplings[ 0 ].length ];</span>
+
+<span class="nc bnc" id="L73" title="All 2 branches missed.">			for ( int d = 0; d &lt; ds.length; ++d )</span>
+<span class="nc" id="L74">				ds[ d ] = downsamplings[ level ][ d ] / downsamplings[ level - 1 ][ d ];</span>
+
+<span class="nc" id="L76">			System.out.println( &quot;Downsampling: &quot; + Util.printCoordinates( downsamplings[ level ] ) + &quot; with relative downsampling of &quot; + Util.printCoordinates( ds ));</span>
+
+<span class="nc" id="L78">			final long[] dim = new long[ previousDim.length ];</span>
+<span class="nc bnc" id="L79" title="All 2 branches missed.">			for ( int d = 0; d &lt; dim.length; ++d )</span>
+<span class="nc" id="L80">				dim[ d ] = previousDim[ d ] / ds[ d ];</span>
+
+<span class="nc bnc" id="L82" title="All 2 branches missed.">			final String datasetDownsampling =</span>
+					bdv ?
+<span class="nc" id="L84">							N5ApiTools.createDownsampledBDVPath( datasetS0, level, storageType)</span>
+							:
+<span class="nc" id="L86">							datasetS0.substring( 0, datasetS0.length() - 3) + &quot;/s&quot; + level;</span>
+
+			try
+			{
+<span class="nc" id="L90">				driverVolumeWriter.createDataset(</span>
+						datasetDownsampling,
+						dim, // dimensions
+						blocksize,
+						datatype,
+						compression );
+
+<span class="nc" id="L97">				driverVolumeWriter.setAttribute( datasetDownsampling, &quot;downsamplingFactors&quot;, downsamplings[ level ] );</span>
+			}
+<span class="nc" id="L99">			catch ( Exception e )</span>
+			{
+<span class="nc" id="L101">				System.out.println( &quot;Couldn't create downsampling level &quot; + level + &quot; for container '&quot; + path + &quot;', dataset '&quot; + datasetDownsampling + &quot;': &quot; + e );</span>
+<span class="nc" id="L102">				return false;</span>
+<span class="nc" id="L103">			}</span>
+
+<span class="nc" id="L105">			final List&lt;long[][]&gt; gridDS = Grid.create(</span>
+					dim,
+					new int[] {
+							blocksize[0],
+							blocksize[1],
+							blocksize[2]
+					},
+					blocksize);
+
+<span class="nc" id="L114">			System.out.println( new Date( System.currentTimeMillis() ) + &quot;: s&quot; + level + &quot; num blocks=&quot; + gridDS.size() );</span>
+
+<span class="nc" id="L116">			final String datasetPrev = previousDataset;</span>
+
+<span class="nc" id="L118">			System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Loading '&quot; + datasetPrev + &quot;', downsampled will be written as '&quot; + datasetDownsampling + &quot;'.&quot; );</span>
+
+<span class="nc" id="L120">			final JavaRDD&lt;long[][]&gt; rdd = sc.parallelize( gridDS );</span>
+<span class="nc" id="L121">			final long time = System.currentTimeMillis();</span>
+
+<span class="nc" id="L123">			rdd.foreach(</span>
+					gridBlock -&gt;
+					{
+<span class="nc" id="L126">						final N5Writer executorVolumeWriter =</span>
+<span class="nc" id="L127">								N5Util.createN5Writer( path, storageType );</span>
+
+						try
+						{
+<span class="nc bnc" id="L131" title="All 2 branches missed.">							if ( datatype == DataType.UINT16 )</span>
+							{
+<span class="nc" id="L133">								RandomAccessibleInterval&lt;UnsignedShortType&gt; downsampled = N5Utils.open(executorVolumeWriter, datasetPrev);</span>
+
+<span class="nc bnc" id="L135" title="All 2 branches missed.">								for ( int d = 0; d &lt; downsampled.numDimensions(); ++d )</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">									if ( ds[ d ] &gt; 1 )</span>
+<span class="nc" id="L137">										downsampled = LazyHalfPixelDownsample2x.init(</span>
+											downsampled,
+											new FinalInterval( downsampled ),
+											new UnsignedShortType(),
+											blocksize,
+											d);
+
+<span class="nc" id="L144">								final RandomAccessibleInterval&lt;UnsignedShortType&gt; sourceGridBlock = Views.offsetInterval(downsampled, gridBlock[0], gridBlock[1]);</span>
+<span class="nc" id="L145">								N5Utils.saveNonEmptyBlock(sourceGridBlock, executorVolumeWriter, datasetDownsampling, gridBlock[2], new UnsignedShortType());</span>
+<span class="nc" id="L146">							}</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">							else if ( datatype == DataType.UINT8 )</span>
+							{
+<span class="nc" id="L149">								RandomAccessibleInterval&lt;UnsignedByteType&gt; downsampled = N5Utils.open(executorVolumeWriter, datasetPrev);</span>
+
+<span class="nc bnc" id="L151" title="All 2 branches missed.">								for ( int d = 0; d &lt; downsampled.numDimensions(); ++d )</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">									if ( ds[ d ] &gt; 1 )</span>
+<span class="nc" id="L153">										downsampled = LazyHalfPixelDownsample2x.init(</span>
+											downsampled,
+											new FinalInterval( downsampled ),
+											new UnsignedByteType(),
+											blocksize,
+											d);
+
+<span class="nc" id="L160">								final RandomAccessibleInterval&lt;UnsignedByteType&gt; sourceGridBlock = Views.offsetInterval(downsampled, gridBlock[0], gridBlock[1]);</span>
+<span class="nc" id="L161">								N5Utils.saveNonEmptyBlock(sourceGridBlock, executorVolumeWriter, datasetDownsampling, gridBlock[2], new UnsignedByteType());</span>
+<span class="nc" id="L162">							}</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">							else if ( datatype == DataType.FLOAT32 )</span>
+							{
+<span class="nc" id="L165">								RandomAccessibleInterval&lt;FloatType&gt; downsampled = N5Utils.open(executorVolumeWriter, datasetPrev);</span>
+
+<span class="nc bnc" id="L167" title="All 2 branches missed.">								for ( int d = 0; d &lt; downsampled.numDimensions(); ++d )</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">									if ( ds[ d ] &gt; 1 )</span>
+<span class="nc" id="L169">										downsampled = LazyHalfPixelDownsample2x.init(</span>
+											downsampled,
+											new FinalInterval( downsampled ),
+											new FloatType(),
+											blocksize,
+											d);
+
+<span class="nc" id="L176">								final RandomAccessibleInterval&lt;FloatType&gt; sourceGridBlock = Views.offsetInterval(downsampled, gridBlock[0], gridBlock[1]);</span>
+<span class="nc" id="L177">								N5Utils.saveNonEmptyBlock(sourceGridBlock, executorVolumeWriter, datasetDownsampling, gridBlock[2], new FloatType());</span>
+<span class="nc" id="L178">							}</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">							else if ( datatype == DataType.INT16 )</span>
+							{
+								// Tobias: unfortunately I store as short and treat it as unsigned short in Java.
+								// The reason is, that when I wrote this, the jhdf5 library did not support unsigned short. It's terrible and should be fixed.
+								// https://github.com/bigdataviewer/bigdataviewer-core/issues/154
+								// https://imagesc.zulipchat.com/#narrow/stream/327326-BigDataViewer/topic/XML.2FHDF5.20specification
+<span class="nc" id="L185">								RandomAccessibleInterval&lt;UnsignedShortType&gt; downsampled =</span>
+<span class="nc" id="L186">										Converters.convertRAI(</span>
+<span class="nc" id="L187">												(RandomAccessibleInterval&lt;ShortType&gt;)(Object)N5Utils.open(executorVolumeWriter, datasetPrev),</span>
+<span class="nc" id="L188">												(i,o)-&gt;o.set( i.getShort() ),</span>
+												new UnsignedShortType());
+
+<span class="nc bnc" id="L191" title="All 2 branches missed.">								for ( int d = 0; d &lt; downsampled.numDimensions(); ++d )</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">									if ( ds[ d ] &gt; 1 )</span>
+<span class="nc" id="L193">										downsampled = LazyHalfPixelDownsample2x.init(</span>
+											downsampled,
+											new FinalInterval( downsampled ),
+											new UnsignedShortType(),
+											blocksize,
+											d);
+
+<span class="nc" id="L200">								final RandomAccessibleInterval&lt;ShortType&gt; sourceGridBlock =</span>
+<span class="nc" id="L201">										Converters.convertRAI( Views.offsetInterval(downsampled, gridBlock[0], gridBlock[1]), (i,o)-&gt;o.set( i.getShort() ), new ShortType() );</span>
+<span class="nc" id="L202">								N5Utils.saveNonEmptyBlock(sourceGridBlock, executorVolumeWriter, datasetDownsampling, gridBlock[2], new ShortType());</span>
+<span class="nc" id="L203">							}</span>
+							else
+							{
+<span class="nc" id="L206">								System.out.println( &quot;Unsupported pixel type: &quot; + datatype );</span>
+<span class="nc" id="L207">								throw new RuntimeException(&quot;Unsupported pixel type: &quot; + datatype );</span>
+							}
+						}
+<span class="nc" id="L210">						catch (Exception exc) </span>
+						{
+<span class="nc" id="L212">							System.out.println( &quot;Error writing block offset=&quot; + Util.printCoordinates( gridBlock[0] ) + &quot;' ... &quot; + exc );</span>
+<span class="nc" id="L213">							exc.printStackTrace();</span>
+<span class="nc" id="L214">						}</span>
+
+						// if it is not the shared HDF5 writer, then close
+<span class="nc bnc" id="L217" title="All 2 branches missed.">						if ( N5Util.sharedHDF5Writer != executorVolumeWriter )</span>
+<span class="nc" id="L218">							executorVolumeWriter.close();</span>
+<span class="nc" id="L219">					});</span>
+
+<span class="nc" id="L221">			System.out.println( &quot;Saved level s &quot; + level + &quot;, took: &quot; + (System.currentTimeMillis() - time ) + &quot; ms.&quot; );</span>
+
+			// for next downsampling level
+<span class="nc" id="L224">			previousDim = dim.clone();</span>
+<span class="nc" id="L225">			previousDataset = datasetDownsampling;</span>
+		}
+
+<span class="nc" id="L228">		return true;</span>
+	}
+
+	public static boolean testDownsamplingParameters( final boolean multiRes, final List&lt;String&gt; downsampling )
+	{
+		// no not create multi-res pyramid
+<span class="nc bnc" id="L234" title="All 4 branches missed.">		if ( !multiRes &amp;&amp; downsampling == null )</span>
+<span class="nc" id="L235">			return true;</span>
+
+<span class="nc bnc" id="L237" title="All 4 branches missed.">		if ( multiRes &amp;&amp; downsampling != null )</span>
+		{
+<span class="nc" id="L239">			System.out.println( &quot;If you want to create a multi-resolution pyramid, you must select either automatic (--multiRes) - OR - manual mode (e.g. --downsampling 2,2,1; 2,2,1; 2,2,2)&quot;);</span>
+<span class="nc" id="L240">			return false;</span>
+		}
+
+<span class="nc" id="L243">		return true;</span>
+	}
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

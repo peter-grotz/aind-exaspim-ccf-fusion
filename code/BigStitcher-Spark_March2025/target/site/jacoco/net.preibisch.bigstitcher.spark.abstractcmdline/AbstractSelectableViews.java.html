@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AbstractSelectableViews.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark.abstractcmdline</a> &gt; <span class="el_source">AbstractSelectableViews.java</span></div><h1>AbstractSelectableViews.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark.abstractcmdline;
+
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.concurrent.Callable;
+
+import mpicbg.spim.data.sequence.ViewId;
+import net.preibisch.bigstitcher.spark.util.Import;
+import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
+import picocli.CommandLine.Option;
+
+<span class="nc" id="L34">public abstract class AbstractSelectableViews extends AbstractBasic implements Callable&lt;Void&gt;, Serializable //implements Callable&lt;Void&gt;, Serializable</span>
+{
+	private static final long serialVersionUID = 6343769494141756973L;
+
+<span class="nc" id="L38">	@Option(names = { &quot;--angleId&quot; }, description = &quot;list the angle ids that should be processed, you can find them in the XML, e.g. --angleId '0,1,2' (default: all angles)&quot;)</span>
+	protected String angleIds = null;
+
+<span class="nc" id="L41">	@Option(names = { &quot;--tileId&quot; }, description = &quot;list the tile ids that should be processed, you can find them in the XML, e.g. --tileId '0,1,2' (default: all tiles)&quot;)</span>
+	protected String tileIds = null;
+
+<span class="nc" id="L44">	@Option(names = { &quot;--illuminationId&quot; }, description = &quot;list the illumination ids that should be processed, you can find them in the XML, e.g. --illuminationId '0,1,2' (default: all illuminations)&quot;)</span>
+	protected String illuminationIds = null;
+
+<span class="nc" id="L47">	@Option(names = { &quot;--channelId&quot; }, description = &quot;list the channel ids that should be processed, you can find them in the XML (usually just one when fusing), e.g. --channelId '0,1,2' (default: all channels)&quot;)</span>
+	protected String channelIds = null;
+
+<span class="nc" id="L50">	@Option(names = { &quot;--timepointId&quot; }, description = &quot;list the timepoint ids that should be processed, you can find them in the XML (usually just one when fusing), e.g. --timepointId '0,1,2' (default: all time points)&quot;)</span>
+	protected String timepointIds = null;
+
+<span class="nc" id="L53">	@Option(names = { &quot;-vi&quot; }, description = &quot;specifically list the view ids (time point, view setup) that should be fused into a single image, e.g. -vi '0,0' -vi '0,1' (default: all view ids)&quot;)</span>
+	protected String[] vi = null;
+
+	public ArrayList&lt; ViewId &gt; loadViewIds( final SpimData2 dataGlobal ) throws IllegalArgumentException
+	{
+<span class="nc" id="L58">		return loadViewIds(dataGlobal, vi, angleIds, channelIds, illuminationIds, tileIds, timepointIds);</span>
+		/*Import.validateInputParameters(vi, angleIds, channelIds, illuminationIds, tileIds, timepointIds);
+
+		// select views to process
+		ArrayList&lt; ViewId &gt; viewIdsGlobal =
+				Import.createViewIds(
+						dataGlobal, vi, angleIds, channelIds, illuminationIds, tileIds, timepointIds);
+
+		if ( viewIdsGlobal.size() == 0 )
+		{
+			throw new IllegalArgumentException( &quot;No views to be processed.&quot; );
+		}
+		else
+		{
+			System.out.println( &quot;The following ViewIds will be processed: &quot;);
+			Collections.sort( viewIdsGlobal );
+			for ( final ViewId v : viewIdsGlobal )
+				System.out.print( &quot;[&quot; + v.getTimePointId() + &quot;,&quot; + v.getViewSetupId() + &quot;] &quot; );
+			System.out.println();
+		}
+
+		return viewIdsGlobal;*/
+	}
+
+	public static ArrayList&lt; ViewId &gt; loadViewIds(
+			final SpimData2 dataGlobal,
+			final String[] vi,
+			final String angleIds,
+			final String channelIds,
+			final String illuminationIds,
+			final String tileIds,
+			final String timepointIds ) throws IllegalArgumentException
+	{
+<span class="nc" id="L91">		Import.validateInputParameters(vi, angleIds, channelIds, illuminationIds, tileIds, timepointIds);</span>
+
+		// select views to process
+<span class="nc" id="L94">		ArrayList&lt; ViewId &gt; viewIdsGlobal =</span>
+<span class="nc" id="L95">				Import.createViewIds(</span>
+						dataGlobal, vi, angleIds, channelIds, illuminationIds, tileIds, timepointIds);
+
+<span class="nc bnc" id="L98" title="All 2 branches missed.">		if ( viewIdsGlobal.size() == 0 )</span>
+		{
+<span class="nc" id="L100">			throw new IllegalArgumentException( &quot;No views to be processed.&quot; );</span>
+		}
+		else
+		{
+<span class="nc" id="L104">			System.out.println( &quot;The following ViewIds will be processed: &quot;);</span>
+<span class="nc" id="L105">			Collections.sort( viewIdsGlobal );</span>
+<span class="nc bnc" id="L106" title="All 2 branches missed.">			for ( final ViewId v : viewIdsGlobal )</span>
+<span class="nc" id="L107">				System.out.print( &quot;[&quot; + v.getTimePointId() + &quot;,&quot; + v.getViewSetupId() + &quot;] &quot; );</span>
+<span class="nc" id="L108">			System.out.println();</span>
+		}
+
+<span class="nc" id="L111">		return viewIdsGlobal;</span>
+	}
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

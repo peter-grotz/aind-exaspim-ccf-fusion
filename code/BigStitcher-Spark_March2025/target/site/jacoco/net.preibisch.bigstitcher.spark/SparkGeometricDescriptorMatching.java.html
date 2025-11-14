@@ -1,0 +1,659 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SparkGeometricDescriptorMatching.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark</a> &gt; <span class="el_source">SparkGeometricDescriptorMatching.java</span></div><h1>SparkGeometricDescriptorMatching.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark;
+
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+
+import mpicbg.models.Model;
+import mpicbg.spim.data.SpimDataException;
+import mpicbg.spim.data.sequence.ViewId;
+import net.imglib2.util.Pair;
+import net.imglib2.util.ValuePair;
+import net.preibisch.bigstitcher.spark.abstractcmdline.AbstractRegistration;
+import net.preibisch.bigstitcher.spark.util.Spark;
+import net.preibisch.legacy.io.IOFunctions;
+import net.preibisch.legacy.mpicbg.PointMatchGeneric;
+import net.preibisch.mvrecon.fiji.plugin.interestpointregistration.parameters.AdvancedRegistrationParameters;
+import net.preibisch.mvrecon.fiji.plugin.interestpointregistration.parameters.BasicRegistrationParameters.InterestPointOverlapType;
+import net.preibisch.mvrecon.fiji.plugin.interestpointregistration.parameters.BasicRegistrationParameters.OverlapType;
+import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.interestpoints.InterestPoint;
+import net.preibisch.mvrecon.fiji.spimdata.interestpoints.InterestPoints;
+import net.preibisch.mvrecon.fiji.spimdata.interestpoints.ViewInterestPointLists;
+import net.preibisch.mvrecon.process.interestpointregistration.TransformationTools;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.MatcherPairwise;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.MatcherPairwiseTools;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.MatcherPairwiseTools.MatchingTask;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.PairwiseResult;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.PairwiseSetup;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.grouping.Group;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.grouping.GroupedInterestPoint;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.grouping.InterestPointGroupingMinDistance;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.overlap.OverlapDetection;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.methods.fastrgldm.FRGLDMPairwise;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.methods.fastrgldm.FRGLDMParameters;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.methods.geometrichashing.GeometricHashingPairwise;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.methods.geometrichashing.GeometricHashingParameters;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.methods.icp.IterativeClosestPointPairwise;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.methods.icp.IterativeClosestPointParameters;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.methods.ransac.RANSACParameters;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.methods.rgldm.RGLDMPairwise;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.methods.rgldm.RGLDMParameters;
+import picocli.CommandLine;
+import picocli.CommandLine.Option;
+import scala.Tuple2;
+
+<span class="nc" id="L78">public class SparkGeometricDescriptorMatching extends AbstractRegistration</span>
+{
+	private static final long serialVersionUID = 6114598951078086239L;
+
+<span class="nc" id="L82">	public enum Method { FAST_ROTATION, FAST_TRANSLATION, PRECISE_TRANSLATION, ICP };</span>
+
+<span class="nc" id="L84">	@Option(names = { &quot;-l&quot;, &quot;--label&quot; }, required = true, description = &quot;label(s) of the interest points used for registration (e.g. -l beads -l nuclei)&quot;)</span>
+	protected ArrayList&lt;String&gt; labels = null;
+
+<span class="nc" id="L87">	@Option(names = { &quot;-m&quot;, &quot;--method&quot; }, required = true, description = &quot;the matching method; FAST_ROTATION, FAST_TRANSLATION, PRECISE_TRANSLATION or ICP&quot;)</span>
+	protected Method registrationMethod = null;
+
+<span class="nc" id="L90">	@Option(names = { &quot;-s&quot;, &quot;--significance&quot; }, description = &quot;how much better the first match between two descriptors has to be compareed to the second best one (default: 3.0)&quot;)</span>
+<span class="nc" id="L91">	protected Double significance = 3.0;</span>
+
+<span class="nc" id="L93">	@Option(names = { &quot;-sr&quot;, &quot;--searchRadius&quot; }, description = &quot;Only for PRECISE_TRANSLATION; limits the search range for corresponding points in global coordinate space (default: no limit)&quot;)</span>
+	protected Double searchRadius = null;
+
+<span class="nc" id="L96">	@Option(names = { &quot;-r&quot;, &quot;--redundancy&quot; }, description = &quot;the redundancy of the local descriptor (default: 1)&quot;)</span>
+<span class="nc" id="L97">	protected Integer redundancy = 1;</span>
+
+<span class="nc" id="L99">	@Option(names = { &quot;-n&quot;, &quot;--numNeighbors&quot; }, description = &quot;the number of neighoring points used to build the local descriptor, only supported by PRECISE_TRANSLATION (default: 3)&quot;)</span>
+<span class="nc" id="L100">	protected Integer numNeighbors = 3;</span>
+
+<span class="nc" id="L102">	@Option(names = { &quot;--clearCorrespondences&quot; }, description = &quot;clear existing corresponding interest points for processed ViewIds and label before adding new ones (default: false)&quot;)</span>
+	protected boolean clearCorrespondences = false;
+
+<span class="nc" id="L105">	@Option(names = { &quot;--matchAcrossLabels&quot; }, description = &quot;if you specified more than one label, setting this to true will match in between label classes (default: false)&quot;)</span>
+	protected boolean matchAcrossLabels = false;
+
+<span class="nc" id="L108">	@Option(names = { &quot;-ipfr&quot;, &quot;--interestpointsForReg&quot; }, description = &quot;which interest points to use for pairwise registrations, use OVERLAPPING_ONLY or ALL points (default: ALL)&quot;)</span>
+	protected InterestPointOverlapType interestpointsForReg = InterestPointOverlapType.ALL;
+
+<span class="nc" id="L111">	@Option(names = { &quot;-vr&quot;, &quot;--viewReg&quot; }, description = &quot;which views to register with each other, compare OVERLAPPING_ONLY or ALL_AGAINST_ALL (default: OVERLAPPING_ONLY)&quot;)</span>
+	protected OverlapType viewReg = OverlapType.OVERLAPPING_ONLY;
+
+
+<span class="nc" id="L115">	@Option(names = { &quot;--interestPointMergeDistance&quot; }, description = &quot;when grouping of views is selected, merge interest points within that radius in px (default: 5.0)&quot;)</span>
+<span class="nc" id="L116">	protected Double interestPointMergeDistance = 5.0;</span>
+
+
+<span class="nc" id="L119">	@Option(names = { &quot;--groupIllums&quot; }, description = &quot;group all illumination directions that belong to the same angle/channel/tile/timepoint together as one view, e.g. to stitch illums as one (default: false)&quot;)</span>
+	protected boolean groupIllums = false;
+
+<span class="nc" id="L122">	@Option(names = { &quot;--groupChannels&quot; }, description = &quot;group all channels that belong to the same angle/illumination/tile/timepoint together as one view, e.g. to stitch channels as one (default: false)&quot;)</span>
+	protected boolean groupChannels = false;
+
+<span class="nc" id="L125">	@Option(names = { &quot;--groupTiles&quot; }, description = &quot;group all tiles that belong to the same angle/channel/illumination/timepoint together as one view, e.g. to align across angles (default: false)&quot;)</span>
+	protected boolean groupTiles = false;
+
+<span class="nc" id="L128">	@Option(names = { &quot;--splitTimepoints&quot; }, description = &quot;group all angles/channels/illums/tiles that belong to the same timepoint as one View, e.g. for stabilization across time (default: false)&quot;)</span>
+	protected boolean splitTimepoints = false;
+
+
+<span class="nc" id="L132">	@Option(names = { &quot;-rit&quot;, &quot;--ransacIterations&quot; }, description = &quot;max number of ransac iterations (default: 10,000 for descriptors, 200 for ICP)&quot;)</span>
+	protected Integer ransacIterations = null;
+
+<span class="nc" id="L135">	@Option(names = { &quot;-rme&quot;, &quot;--ransacMaxError&quot; }, description = &quot;ransac max error in pixels (default: 5.0 for descriptors, 2.5 for ICP)&quot;)</span>
+	protected Double ransacMaxError = null;
+
+	// TODOL ignored by ICP
+<span class="nc" id="L139">	@Option(names = { &quot;-rmir&quot;, &quot;--ransacMinInlierRatio&quot; }, description = &quot;ransac min inlier ratio (default: 0.1)&quot;)</span>
+<span class="nc" id="L140">	protected Double ransacMinInlierRatio = 0.1;</span>
+
+<span class="nc" id="L142">	@Option(names = { &quot;-rmif&quot;, &quot;--ransacMinInlierFactor&quot; }, description = &quot;ransac min inlier factor, i.e. how many time the minimal number of matches need to found, e.g. affine needs 4 matches, 3x means at least 12 matches required (default: 3.0)&quot;)</span>
+<span class="nc" id="L143">	protected Double ransacMinInlierFactor = 3.0;</span>
+
+	
+<span class="nc" id="L146">	@Option(names = { &quot;-ime&quot;, &quot;--icpMaxError&quot; }, description = &quot;ICP max error in pixels (default: 5.0)&quot;)</span>
+<span class="nc" id="L147">	protected Double icpMaxError = 5.0;</span>
+
+<span class="nc" id="L149">	@Option(names = { &quot;-iit&quot;, &quot;--icpIterations&quot; }, description = &quot;max number of ICP iterations (default: 200)&quot;)</span>
+<span class="nc" id="L150">	protected Integer icpIterations = 200;</span>
+
+<span class="nc" id="L152">	@Option(names = { &quot;--icpUseRANSAC&quot; }, description = &quot;ICP uses RANSAC at every iteration to filter correspondences (default: false)&quot;)</span>
+	protected boolean icpUseRANSAC = false;
+	
+	//@Option(names = { &quot;-p&quot;, &quot;--pairsPerSparkJob&quot; }, description = &quot;how many pairs of views are processed per spark job (default: 1)&quot;)
+	//protected Integer pairsPerSparkJob = 1;
+
+	@Override
+	public Void call() throws Exception
+	{
+<span class="nc" id="L161">		this.setRegion();</span>
+
+<span class="nc" id="L163">		initRegistrationParameters();</span>
+
+<span class="nc bnc" id="L165" title="All 4 branches missed.">		if ( this.numNeighbors != 3 &amp;&amp; registrationMethod != Method.PRECISE_TRANSLATION )</span>
+		{
+<span class="nc" id="L167">			System.out.println( &quot;Only PRECISE_TRANSLATION method supports numNeighbors != 3.&quot; );</span>
+<span class="nc" id="L168">			return null;</span>
+		}
+
+<span class="nc bnc" id="L171" title="All 8 branches missed.">		if ( registrationMethod == Method.ICP &amp;&amp; ( redundancy != 1 || significance != 3.0 || numNeighbors != 3 ))</span>
+		{
+<span class="nc" id="L173">			System.out.println( &quot;ICP does not support parameters redundancy, significance and numNeighbors&quot; );</span>
+<span class="nc" id="L174">			return null;</span>
+		}
+
+<span class="nc bnc" id="L177" title="All 4 branches missed.">		if ( ransacIterations == null &amp;&amp; registrationMethod == Method.ICP )</span>
+		{
+<span class="nc" id="L179">			ransacIterations = 200;</span>
+<span class="nc" id="L180">			ransacMaxError = 2.5;</span>
+		}
+<span class="nc bnc" id="L182" title="All 2 branches missed.">		else if ( ransacIterations == null )</span>
+		{
+<span class="nc" id="L184">			ransacIterations = 10000;</span>
+<span class="nc" id="L185">			ransacMaxError = 5.0;</span>
+		}
+
+		// identify groups/subsets
+<span class="nc" id="L189">		final PairwiseSetup&lt; ViewId &gt; setup = setupGroups( viewReg );</span>
+
+		// find out how many pairs there are
+		//final int numJobs = (setup.getPairs().size()/pairsPerSparkJob) + (setup.getPairs().size()%pairsPerSparkJob &gt; 0 ? 1 : 0);
+<span class="nc" id="L193">		System.out.println( &quot;In total &quot; + setup.getPairs().size() + &quot; pairs of views need to be aligned.&quot;);// with &quot; + pairsPerSparkJob + &quot; pair(s) per Spark job, meaning &quot; + numJobs + &quot; jobs.&quot; );</span>
+
+		// if we group, we will have less pairs, since certain views are combined into one big view
+		//final InterestpointGroupingType groupingType = InterestpointGroupingType.DO_NOT_GROUP; -- this is always ADD_ALL - either group or not (was only necessary in the GUI, because one could group for interest points and/or global opt
+
+<span class="nc" id="L198">		System.out.println( &quot;Pairwise model = &quot; + createModelInstance(transformationModel, regularizationModel, regularizationLambda).getClass().getSimpleName() );</span>
+
+		// set up ViewIds, Labels and Weights
+<span class="nc" id="L201">		final HashMap&lt; String, Double &gt; map = new HashMap&lt;&gt;();</span>
+
+<span class="nc bnc" id="L203" title="All 2 branches missed.">		for ( int i = 0; i &lt; labels.size(); ++i )</span>
+<span class="nc" id="L204">			map.put( labels.get( i ), 1.0 ); // weights are not relevant during point matching, just for the solver (global opt)</span>
+
+<span class="nc" id="L206">		System.out.println( &quot;labels &amp; weights: &quot; + map);</span>
+
+<span class="nc" id="L208">		final HashMap&lt; ViewId, HashMap&lt; String, Double &gt; &gt; labelMapGlobal = buildLabelMap( dataGlobal, viewIdsGlobal, map );</span>
+
+		// clear all correspondences if wanted
+<span class="nc bnc" id="L211" title="All 2 branches missed.">		if ( clearCorrespondences )</span>
+		{
+<span class="nc" id="L213">			System.out.println( &quot;Clearing correspondences ... &quot;);</span>
+<span class="nc" id="L214">			MatcherPairwiseTools.clearCorrespondences( viewIdsGlobal, dataGlobal.getViewInterestPoints().getViewInterestPoints(), labelMapGlobal );</span>
+		}
+
+<span class="nc" id="L217">		final URI xmlURI = this.xmlURI;</span>
+<span class="nc" id="L218">		final boolean matchAcrossLabels = this.matchAcrossLabels;</span>
+<span class="nc" id="L219">		final InterestPointOverlapType interestpointsForReg = this.interestpointsForReg;</span>
+<span class="nc" id="L220">		final int ransacIterations = this.ransacIterations;</span>
+<span class="nc" id="L221">		final double ransacMaxEpsilon = this.ransacMaxError;</span>
+<span class="nc" id="L222">		final double ransacMinInlierRatio = this.ransacMinInlierRatio;</span>
+<span class="nc" id="L223">		final double ransacMinInlierFactor = this.ransacMinInlierFactor;</span>
+<span class="nc" id="L224">		final double icpMaxError = this.icpMaxError;</span>
+<span class="nc" id="L225">		final int icpMaxIterations = this.icpIterations;</span>
+<span class="nc" id="L226">		final boolean icpUseRANSAC = this.icpUseRANSAC;</span>
+<span class="nc" id="L227">		final Method registrationMethod = this.registrationMethod;</span>
+<span class="nc" id="L228">		final double ratioOfDistance = this.significance;</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">		final boolean limitSearchRadius = ( this.searchRadius == null ) ? false : true;</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">		final double searchRadius = ( this.searchRadius == null ) ? 0 : this.searchRadius;</span>
+<span class="nc" id="L231">		final int redundancy = this.redundancy;</span>
+<span class="nc" id="L232">		final int numNeighbors = this.numNeighbors;</span>
+<span class="nc" id="L233">		final double interestPointMergeDistance = this.interestPointMergeDistance;</span>
+<span class="nc" id="L234">		final TransformationModel transformationModel = this.transformationModel;</span>
+<span class="nc" id="L235">		final RegularizationModel regularizationModel = this.regularizationModel;</span>
+<span class="nc" id="L236">		final double lambda = this.regularizationLambda;</span>
+
+<span class="nc" id="L238">		final SparkConf conf = new SparkConf().setAppName(&quot;SparkGeometricDescriptorRegistration&quot;);</span>
+
+<span class="nc bnc" id="L240" title="All 2 branches missed.">		if ( localSparkBindAddress )</span>
+<span class="nc" id="L241">			conf.set(&quot;spark.driver.bindAddress&quot;, &quot;127.0.0.1&quot;);</span>
+
+<span class="nc" id="L243">		final JavaSparkContext sc = new JavaSparkContext(conf);</span>
+<span class="nc" id="L244">		sc.setLogLevel(&quot;ERROR&quot;);</span>
+
+		final JavaRDD&lt; ArrayList&lt; Tuple2&lt; ArrayList&lt; PointMatchGeneric&lt; InterestPoint &gt; &gt;, MatchingTask&lt;ViewId&gt; &gt; &gt; &gt; rddResults;
+
+<span class="nc bnc" id="L248" title="All 8 branches missed.">		if ( !groupTiles &amp;&amp; !groupIllums &amp;&amp; !groupChannels &amp;&amp; !splitTimepoints )</span>
+		{
+<span class="nc" id="L250">			System.out.println( &quot;NO grouping.&quot; );</span>
+
+<span class="nc" id="L252">			final ArrayList&lt;MatchingTask&lt;ViewId&gt;&gt; tasksList =</span>
+<span class="nc" id="L253">					MatcherPairwiseTools.getTasksList( Spark.toViewIds( setup.getPairs() ), labelMapGlobal, matchAcrossLabels );</span>
+
+<span class="nc" id="L255">			System.out.println( &quot;The following ViewIds will be matched to each other: &quot;);</span>
+<span class="nc" id="L256">			setup.getPairs().forEach( pair -&gt; System.out.println( &quot;\t&quot; + Group.pvid( pair.getA() ) + &quot; &lt;=&gt; &quot; + Group.pvid( pair.getB() ) ) );</span>
+<span class="nc" id="L257">			System.out.println( &quot;In total: &quot; + tasksList.size() + &quot; pair(s) across labels: &quot; + labels);</span>
+
+<span class="nc" id="L259">			final JavaRDD&lt;MatchingTask&lt;ViewId&gt;&gt; rdd = sc.parallelize( tasksList ).repartition( Math.min( Spark.maxPartitions, tasksList.size() ) );</span>
+
+<span class="nc" id="L261">			rddResults = rdd.map( task -&gt;</span>
+			{
+<span class="nc" id="L263">				final SpimData2 data = Spark.getSparkJobSpimData2( xmlURI );</span>
+<span class="nc" id="L264">				final ArrayList&lt; ViewId &gt; views = task.viewsAsList();</span>
+
+				// filter so we only load interest points we actually need
+<span class="nc" id="L267">				final HashMap&lt; ViewId, HashMap&lt; String, Double &gt; &gt; labelMap = new HashMap&lt;&gt;();</span>
+
+<span class="nc" id="L269">				views.forEach( viewId -&gt; labelMap.put( viewId, new HashMap&lt;&gt;() ));</span>
+
+<span class="nc" id="L271">				labelMapGlobal.get( task.vA ).forEach( (label, weight ) -&gt; {</span>
+<span class="nc bnc" id="L272" title="All 2 branches missed.">					if ( label.equals( task.labelA ) )</span>
+<span class="nc" id="L273">						labelMap.get( task.vA ).put( label , weight );</span>
+<span class="nc" id="L274">				} );</span>
+
+<span class="nc" id="L276">				labelMapGlobal.get( task.vB ).forEach( (label, weight ) -&gt; {</span>
+<span class="nc bnc" id="L277" title="All 2 branches missed.">					if ( label.equals( task.labelB ) )</span>
+<span class="nc" id="L278">						labelMap.get( task.vB ).put( label , weight );</span>
+<span class="nc" id="L279">				} );</span>
+
+				// load &amp; transform all interest points
+<span class="nc" id="L282">				final Map&lt; ViewId, HashMap&lt; String, List&lt; InterestPoint &gt; &gt; &gt; interestpoints =</span>
+<span class="nc" id="L283">						TransformationTools.getAllTransformedInterestPoints(</span>
+							views,
+<span class="nc" id="L285">							data.getViewRegistrations().getViewRegistrations(),</span>
+<span class="nc" id="L286">							data.getViewInterestPoints().getViewInterestPoints(),</span>
+							labelMap );
+
+				// only keep those interestpoints that currently overlap with a view to register against
+<span class="nc bnc" id="L290" title="All 2 branches missed.">				if ( interestpointsForReg == InterestPointOverlapType.OVERLAPPING_ONLY )</span>
+				{
+<span class="nc" id="L292">					final Set&lt; Group&lt; ViewId &gt; &gt; groups = new HashSet&lt;&gt;();</span>
+
+<span class="nc" id="L294">					TransformationTools.filterForOverlappingInterestPoints(</span>
+<span class="nc" id="L295">							interestpoints, groups, data.getViewRegistrations().getViewRegistrations(), data.getSequenceDescription().getViewDescriptions() );</span>
+
+<span class="nc" id="L297">					System.out.println( Group.pvid( task.vA ) + &quot; (&quot; + task.labelA + &quot;) &lt;=&gt; &quot; + Group.pvid( task.vB ) + &quot; (&quot; + task.labelB + &quot;): Remaining interest points for alignment: &quot; );</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">					for ( final Entry&lt; ViewId, HashMap&lt; String, List&lt; InterestPoint &gt; &gt; &gt; element: interestpoints.entrySet() )</span>
+<span class="nc bnc" id="L299" title="All 2 branches missed.">						for ( final Entry&lt; String, List&lt; InterestPoint &gt; &gt; subElement : element.getValue().entrySet() )</span>
+<span class="nc" id="L300">							System.out.println( Group.pvid( element.getKey() ) + &quot;, '&quot; + subElement.getKey() + &quot;' : &quot; + subElement.getValue().size() );</span>
+				}
+
+<span class="nc" id="L303">				final RANSACParameters rp = new RANSACParameters( (float)ransacMaxEpsilon, (float)ransacMinInlierRatio, (float)ransacMinInlierFactor, ransacIterations );</span>
+<span class="nc" id="L304">				final Model&lt; ? &gt; model = createModelInstance(transformationModel, regularizationModel, lambda);</span>
+
+<span class="nc" id="L306">				final MatcherPairwise&lt; InterestPoint &gt; matcher = createMatcherInstance(</span>
+						rp,
+						registrationMethod,
+						model,
+						numNeighbors,
+						redundancy,
+						ratioOfDistance,
+						limitSearchRadius,
+						searchRadius,
+						icpMaxError,
+						icpMaxIterations,
+						icpUseRANSAC);
+
+				// compute single pairwise match
+<span class="nc" id="L320">				final PairwiseResult&lt;InterestPoint&gt; result =</span>
+<span class="nc" id="L321">						MatcherPairwiseTools.getCallables( Arrays.asList( task ), interestpoints, matcher ).get( 0 ).call().getB();</span>
+
+				/*
+				final ExecutorService service = Threads.createFixedExecutorService( 1 );
+
+				final PairwiseResult&lt;InterestPoint&gt; result =
+						MatcherPairwiseTools.computePairs(
+								new ArrayList&lt;&gt;( Arrays.asList( task.getPair() ) ),
+								interestpoints,
+								matcher,
+								matchAcrossLabels,
+								service ).get( 0 ).getB();
+
+				service.shutdown();
+				*/
+<span class="nc" id="L336">				return new ArrayList&lt;&gt;( Arrays.asList( new Tuple2&lt;&gt;( new ArrayList&lt;&gt;( result.getInliers() ), task ) ) );</span>
+			});
+<span class="nc" id="L338">		}</span>
+		else
+		{
+<span class="nc" id="L341">			System.out.println( &quot;grouped&quot; );</span>
+
+<span class="nc" id="L343">			final List&lt;Pair&lt;Group&lt;ViewId&gt;, Group&lt;ViewId&gt;&gt;&gt; groupedPairs =</span>
+<span class="nc" id="L344">					Spark.toGroupViewIds(</span>
+<span class="nc" id="L345">							setup.getSubsets().stream().map( s -&gt; s.getGroupedPairs() ).flatMap(List::stream).collect( Collectors.toList() ) );</span>
+
+			// hashmap Group&lt;ViewId&gt; to Map&lt; String, Double &gt; for defining all tasks ahead of time
+<span class="nc" id="L348">			final HashMap&lt; Group&lt; ViewId &gt;, HashMap&lt; String, Double &gt; &gt; groupedMap = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L349">			setup.getSubsets().forEach( subset -&gt; subset.getGroups().forEach( group -&gt; groupedMap.put( Spark.toGroupViewIds( group ), map ) ));</span>
+
+<span class="nc" id="L351">			final ArrayList&lt;MatchingTask&lt;Group&lt;ViewId&gt;&gt;&gt; tasksList = </span>
+<span class="nc" id="L352">					MatcherPairwiseTools.getTasksList( groupedPairs, groupedMap, matchAcrossLabels ); </span>
+
+<span class="nc" id="L354">			System.out.println( &quot;The following groups of ViewIds will be matched to each other: &quot;);</span>
+<span class="nc" id="L355">			groupedPairs.forEach( pair -&gt; System.out.println( &quot;\t&quot; + pair.getA() + &quot; &lt;=&gt; &quot; + pair.getB() ) );</span>
+<span class="nc" id="L356">			System.out.println( &quot;In total: &quot; + groupedPairs.size() + &quot; pair(s).&quot;);</span>
+
+<span class="nc" id="L358">			final JavaRDD&lt;MatchingTask&lt;Group&lt;ViewId&gt;&gt;&gt; rdd = sc.parallelize( tasksList ).repartition( Math.min( Spark.maxPartitions, tasksList.size() ) );</span>
+
+<span class="nc" id="L360">			rddResults = rdd.map( task -&gt;</span>
+			{
+<span class="nc" id="L362">				final SpimData2 data = Spark.getSparkJobSpimData2( xmlURI );</span>
+				//final Pair&lt;Group&lt;ViewId&gt;, Group&lt;ViewId&gt;&gt; pair = Spark.deserializeGroupedViewIdPairForRDD( serializedGroupPair );
+
+<span class="nc" id="L365">				final ArrayList&lt; ViewId &gt; views = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L366">				views.addAll( task.vA.getViews() );</span>
+<span class="nc" id="L367">				views.addAll( task.vB.getViews() );</span>
+
+				// filter so we only load interest points we actually need
+<span class="nc" id="L370">				final HashMap&lt; ViewId, HashMap&lt; String, Double &gt; &gt; labelMap = new HashMap&lt;&gt;();</span>
+
+<span class="nc" id="L372">				views.forEach( viewId -&gt; labelMap.put( viewId, new HashMap&lt;&gt;() ));</span>
+
+<span class="nc" id="L374">				task.vA.getViews().forEach( viewA -&gt; {</span>
+<span class="nc" id="L375">						labelMapGlobal.get( viewA ).forEach( (label, weight ) -&gt; {</span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">							if ( label.equals( task.labelA ) )</span>
+<span class="nc" id="L377">								labelMap.get( viewA ).put( label, weight );</span>
+<span class="nc" id="L378">						} );</span>
+<span class="nc" id="L379">				} );</span>
+
+<span class="nc" id="L381">				task.vB.getViews().forEach( viewB -&gt; {</span>
+<span class="nc" id="L382">						labelMapGlobal.get( viewB ).forEach( (label, weight ) -&gt; {</span>
+<span class="nc bnc" id="L383" title="All 2 branches missed.">							if ( label.equals( task.labelB ) )</span>
+<span class="nc" id="L384">								labelMap.get( viewB ).put( label, weight );</span>
+<span class="nc" id="L385">						} );</span>
+<span class="nc" id="L386">				} );</span>
+
+				// load &amp; transform all interest points
+<span class="nc" id="L389">				final Map&lt; ViewId, HashMap&lt; String, List&lt; InterestPoint &gt; &gt; &gt; interestpoints =</span>
+<span class="nc" id="L390">						TransformationTools.getAllTransformedInterestPoints(</span>
+							views,
+<span class="nc" id="L392">							data.getViewRegistrations().getViewRegistrations(),</span>
+<span class="nc" id="L393">							data.getViewInterestPoints().getViewInterestPoints(),</span>
+							labelMap );
+
+				// only keep those interestpoints that currently overlap with a view to register against
+<span class="nc bnc" id="L397" title="All 2 branches missed.">				if ( interestpointsForReg == InterestPointOverlapType.OVERLAPPING_ONLY )</span>
+				{
+<span class="nc" id="L399">					final Set&lt; Group&lt; ViewId &gt; &gt; groups = new HashSet&lt;&gt;();</span>
+
+					// this code is to make sure that we are not removing interestpoints for overlapping views that are part of the same group
+					// because they will be combined into one big View and they most likely overlap
+<span class="nc" id="L403">					groups.add( task.vA );</span>
+<span class="nc" id="L404">					groups.add( task.vB );</span>
+
+<span class="nc" id="L406">					TransformationTools.filterForOverlappingInterestPoints( interestpoints, groups, data.getViewRegistrations().getViewRegistrations(), data.getSequenceDescription().getViewDescriptions() );</span>
+
+<span class="nc" id="L408">					System.out.println( task.vA + &quot; (&quot; + task.labelA + &quot;) &lt;=&gt; &quot; + task.vB + &quot; (&quot; + task.labelB + &quot;): Remaining interest points for alignment: &quot; );</span>
+<span class="nc bnc" id="L409" title="All 2 branches missed.">					for ( final Entry&lt; ViewId, HashMap&lt; String, List&lt; InterestPoint &gt; &gt; &gt; element: interestpoints.entrySet() )</span>
+<span class="nc bnc" id="L410" title="All 2 branches missed.">						for ( final Entry&lt; String, List&lt; InterestPoint &gt; &gt; subElement : element.getValue().entrySet() )</span>
+<span class="nc" id="L411">							System.out.println( Group.pvid( element.getKey() ) + &quot;, '&quot; + subElement.getKey() + &quot;' : &quot; + subElement.getValue().size() );</span>
+				}
+
+<span class="nc" id="L414">				final Map&lt; Group&lt; ViewId &gt;, HashMap&lt; String, List&lt; GroupedInterestPoint&lt; ViewId &gt; &gt; &gt; &gt; groupedInterestpoints = new HashMap&lt;&gt;();</span>
+
+<span class="nc" id="L416">				final InterestPointGroupingMinDistance&lt; ViewId &gt; ipGrouping </span>
+						= new InterestPointGroupingMinDistance&lt;&gt;( interestPointMergeDistance, interestpoints );
+
+<span class="nc" id="L419">				IOFunctions.println( task.vA + &quot; &lt;=&gt; &quot; +task.vB + &quot;: Using a maximum radius of &quot; + ipGrouping.getRadius() + &quot; to filter interest points from overlapping views.&quot; );</span>
+
+<span class="nc" id="L421">				groupedInterestpoints.put( task.vA, ipGrouping.group( task.vA ) );</span>
+<span class="nc" id="L422">				IOFunctions.println( task.vA + &quot; &lt;=&gt; &quot; + task.vB + &quot;: Grouping interestpoints for &quot; + task.vA + &quot; (&quot; + ipGrouping.countBefore() + &quot; &gt;&gt;&gt; &quot; + ipGrouping.countAfter() + &quot;)&quot; );</span>
+
+<span class="nc" id="L424">				groupedInterestpoints.put( task.vB, ipGrouping.group( task.vB ) );</span>
+<span class="nc" id="L425">				IOFunctions.println( task.vA + &quot; &lt;=&gt; &quot; + task.vB + &quot;: Grouping interestpoints for &quot; + task.vB + &quot; (&quot; + ipGrouping.countBefore() + &quot; &gt;&gt;&gt; &quot; + ipGrouping.countAfter() + &quot;)&quot; );</span>
+
+<span class="nc" id="L427">				final RANSACParameters rp = new RANSACParameters( (float)ransacMaxEpsilon, (float)ransacMinInlierRatio, (float)ransacMinInlierFactor, ransacIterations );</span>
+<span class="nc" id="L428">				final Model&lt; ? &gt; model = createModelInstance(transformationModel, regularizationModel, lambda);</span>
+
+<span class="nc" id="L430">				final MatcherPairwise&lt; GroupedInterestPoint&lt; ViewId &gt; &gt; matcher = createMatcherInstance(</span>
+						rp,
+						registrationMethod,
+						model,
+						numNeighbors,
+						redundancy,
+						ratioOfDistance,
+						limitSearchRadius,
+						searchRadius,
+						icpMaxError,
+						icpMaxIterations,
+						icpUseRANSAC);
+
+				// compute single pairwise match
+<span class="nc" id="L444">				final PairwiseResult&lt;GroupedInterestPoint&lt;ViewId&gt;&gt; result =</span>
+<span class="nc" id="L445">						MatcherPairwiseTools.getCallables( Arrays.asList( task ), groupedInterestpoints, matcher ).get( 0 ).call().getB();</span>
+
+				//final List&lt; Pair&lt; Pair&lt; Group&lt; ViewId &gt;, Group&lt; ViewId &gt; &gt;, PairwiseResult&lt; GroupedInterestPoint&lt; ViewId &gt; &gt; &gt; &gt; resultGroup =
+				//		MatcherPairwiseTools.computePairs( Arrays.asList( task.getPair() ), groupedInterestpoints, matcher, matchAcrossLabels );
+
+<span class="nc" id="L450">				final HashMap&lt; Pair&lt; ViewId, ViewId &gt;, ArrayList&lt;PointMatchGeneric&lt;InterestPoint&gt;&gt; &gt; mapResults = new HashMap&lt;&gt;();</span>
+
+<span class="nc bnc" id="L452" title="All 2 branches missed.">				for ( final PointMatchGeneric&lt;GroupedInterestPoint&lt;ViewId&gt;&gt; pm : result.getInliers() )// resultGroup.get( 0 ).getB().getInliers() )</span>
+				{
+<span class="nc" id="L454">					GroupedInterestPoint&lt;ViewId&gt; p1 = pm.getPoint1();</span>
+<span class="nc" id="L455">					GroupedInterestPoint&lt;ViewId&gt; p2 = pm.getPoint2();</span>
+
+<span class="nc" id="L457">					final ViewId v1 = p1.getV();</span>
+<span class="nc" id="L458">					final ViewId v2 = p2.getV();</span>
+
+<span class="nc" id="L460">					final InterestPoint ip1 = new InterestPoint( p1.getId(), p1.getL() );</span>
+<span class="nc" id="L461">					final InterestPoint ip2 = new InterestPoint( p2.getId(), p2.getL() );</span>
+<span class="nc" id="L462">					final PointMatchGeneric&lt;InterestPoint&gt; pmNew = new PointMatchGeneric&lt;&gt;( ip1, ip2 );</span>
+
+<span class="nc" id="L464">					final ValuePair&lt;ViewId, ViewId&gt; pv = new ValuePair&lt;&gt;( v1, v2 );</span>
+
+<span class="nc" id="L466">					ArrayList&lt;PointMatchGeneric&lt;InterestPoint&gt;&gt; list = mapResults.get( pv );</span>
+
+<span class="nc bnc" id="L468" title="All 2 branches missed.">					if ( list == null )</span>
+					{
+<span class="nc" id="L470">						list = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L471">						list.add( pmNew );</span>
+<span class="nc" id="L472">						mapResults.put(pv, list);</span>
+					}
+					else
+					{
+<span class="nc" id="L476">						list.add( pmNew );</span>
+					}
+<span class="nc" id="L478">				}</span>
+
+<span class="nc" id="L480">				final ArrayList&lt;Tuple2&lt;ArrayList&lt;PointMatchGeneric&lt;InterestPoint&gt;&gt;, MatchingTask&lt;ViewId&gt;&gt;&gt; resultsLocal = new ArrayList&lt;&gt;();</span>
+
+<span class="nc" id="L482">				System.out.println( task.vA + &quot; &lt;=&gt; &quot; + task.vB + &quot;: The following correspondences were found per ViewId: &quot;);</span>
+<span class="nc bnc" id="L483" title="All 2 branches missed.">				for ( final Entry&lt; Pair&lt; ViewId, ViewId &gt;, ArrayList&lt;PointMatchGeneric&lt;InterestPoint&gt;&gt; &gt; entry : mapResults.entrySet( ))</span>
+				{
+<span class="nc bnc" id="L485" title="All 2 branches missed.">					if ( entry.getValue().size() &lt; model.getMinNumMatches() )</span>
+					{
+<span class="nc" id="L487">						System.out.println( &quot;\t&quot; + task.vA + &quot; &lt;=&gt; &quot; + task.vB + &quot;: &quot; + Group.pvid( entry.getKey().getA() ) + &quot;&lt;-&gt;&quot; + Group.pvid( entry.getKey().getB() )  + &quot;: &quot; + entry.getValue().size() + &quot; correspondences (will be omitted as it is less than model.getMinNumMatches()).&quot; );</span>
+					}
+					else
+					{
+<span class="nc" id="L491">						System.out.println( &quot;\t&quot; + task.vA + &quot; &lt;=&gt; &quot; + task.vB + &quot;: &quot; + Group.pvid( entry.getKey().getA() ) + &quot;&lt;-&gt;&quot; + Group.pvid( entry.getKey().getB() )  + &quot;: &quot; + entry.getValue().size() + &quot; correspondences.&quot; );</span>
+<span class="nc" id="L492">						resultsLocal.add( new Tuple2&lt;&gt;( new ArrayList&lt;&gt;( entry.getValue() ), new MatchingTask&lt;&gt;( entry.getKey().getA(), entry.getKey().getB(), task.labelA, task.labelB ) ) );</span>
+					}
+<span class="nc" id="L494">				}</span>
+
+<span class="nc" id="L496">				System.out.println( &quot;\t&quot; + task.vA + &quot; &lt;=&gt; &quot; + task.vB + &quot;: Remaining per-view correspondences=&quot; + mapResults.size() );</span>
+
+<span class="nc" id="L498">				return resultsLocal;</span>
+			});
+		}
+
+<span class="nc" id="L502">		rddResults.cache();</span>
+<span class="nc" id="L503">		rddResults.count();</span>
+
+<span class="nc" id="L505">		final List&lt;ArrayList&lt;Tuple2&lt;ArrayList&lt;PointMatchGeneric&lt;InterestPoint&gt;&gt;, MatchingTask&lt;ViewId&gt;&gt;&gt;&gt; results = rddResults.collect();</span>
+
+		// add the corresponding detections and output result
+<span class="nc bnc" id="L508" title="All 2 branches missed.">		if ( clearCorrespondences )</span>
+<span class="nc" id="L509">			System.out.println( &quot;Adding corresponding interest points ...&quot;);</span>
+		else
+<span class="nc" id="L511">			System.out.println( &quot;Adding corresponding interest points (be sure to use --clearCorrespondences if you run multiple times, you are not using it right now) ...&quot;);</span>
+
+<span class="nc bnc" id="L513" title="All 2 branches missed.">		for ( final ArrayList&lt;Tuple2&lt;ArrayList&lt;PointMatchGeneric&lt;InterestPoint&gt;&gt;, MatchingTask&lt;ViewId&gt;&gt;&gt; tupleList : results )</span>
+<span class="nc bnc" id="L514" title="All 2 branches missed.">			for ( final Tuple2&lt;ArrayList&lt;PointMatchGeneric&lt;InterestPoint&gt;&gt;, MatchingTask&lt;ViewId&gt;&gt; tuple : tupleList )</span>
+			{
+<span class="nc" id="L516">				final ViewId vA = tuple._2().vA;</span>
+<span class="nc" id="L517">				final ViewId vB = tuple._2().vB;</span>
+
+<span class="nc" id="L519">				final String labelA = tuple._2().labelA;</span>
+<span class="nc" id="L520">				final String labelB = tuple._2().labelB;</span>
+	
+<span class="nc" id="L522">				final InterestPoints listA = dataGlobal.getViewInterestPoints().getViewInterestPoints().get( vA ).getInterestPointList( labelA );</span>
+<span class="nc" id="L523">				final InterestPoints listB = dataGlobal.getViewInterestPoints().getViewInterestPoints().get( vB ).getInterestPointList( labelB );</span>
+	
+<span class="nc" id="L525">				MatcherPairwiseTools.addCorrespondences( tuple._1(), vA, vB, labelA, labelB, listA, listB );</span>
+<span class="nc" id="L526">			}</span>
+
+<span class="nc bnc" id="L528" title="All 2 branches missed.">		if (!dryRun)</span>
+		{
+<span class="nc" id="L530">			System.out.println( &quot;Saving corresponding interest points (in parallel) ...&quot;);</span>
+
+<span class="nc" id="L532">			final ArrayList&lt; Pair&lt; ViewId, String &gt; &gt; allIps = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L534" title="All 2 branches missed.">			for ( final ViewId v : viewIdsGlobal )</span>
+<span class="nc bnc" id="L535" title="All 2 branches missed.">				for ( final String l : labels )</span>
+<span class="nc" id="L536">					allIps.add( new ValuePair&lt;&gt;( v, l) );</span>
+
+<span class="nc" id="L538">			final Map&lt;ViewId, ViewInterestPointLists&gt; ip = dataGlobal.getViewInterestPoints().getViewInterestPoints();</span>
+
+<span class="nc" id="L540">			allIps.parallelStream().forEach( pair -&gt; ip.get( pair.getA() ).getInterestPointList( pair.getB() ).saveCorrespondingInterestPoints( true ) );</span>
+		}
+
+<span class="nc" id="L543">		sc.close();</span>
+
+<span class="nc" id="L545">		System.out.println( &quot;Done.&quot;);</span>
+
+<span class="nc" id="L547">		return null;</span>
+	}
+
+	public PairwiseSetup&lt; ViewId &gt; setupGroups( final OverlapType viewReg )
+	{
+<span class="nc" id="L552">		final Set&lt; Group&lt; ViewId &gt; &gt; groupsGlobal = AdvancedRegistrationParameters.getGroups( dataGlobal, viewIdsGlobal, groupTiles, groupIllums, groupChannels, splitTimepoints );</span>
+<span class="nc" id="L553">		final PairwiseSetup&lt; ViewId &gt; setup = pairwiseSetupInstance( this.registrationTP, viewIdsGlobal, groupsGlobal, this.rangeTP, this.referenceTP );</span>
+<span class="nc" id="L554">		final OverlapDetection&lt;ViewId&gt; overlapDetection = getOverlapDetection( dataGlobal, viewReg );</span>
+<span class="nc" id="L555">		identifySubsets( setup, overlapDetection );</span>
+
+<span class="nc" id="L557">		return setup;</span>
+	}
+
+	public static &lt; I extends InterestPoint&gt; MatcherPairwise&lt; I &gt; createMatcherInstance(
+			final RANSACParameters rp,
+			final Method registrationMethod,
+			final Model&lt; ? &gt; model,
+			final int numNeighbors,
+			final int redundancy,
+			final double ratioOfDistance,
+			final boolean limitSearchRadius,
+			final double searchRadius,
+			final double icpMaxDistance,
+			final int icpMaxIterations,
+			final boolean icpUseRANSAC )
+	{
+		MatcherPairwise&lt; I &gt; matcher;
+
+<span class="nc bnc" id="L575" title="All 2 branches missed.">		if ( registrationMethod == Method.FAST_ROTATION )</span>
+		{
+<span class="nc" id="L577">			final GeometricHashingParameters gp = new GeometricHashingParameters(</span>
+					model,
+					GeometricHashingParameters.differenceThreshold,
+					(float)ratioOfDistance,
+					(int)redundancy );
+
+<span class="nc" id="L583">			matcher = new GeometricHashingPairwise&lt;&gt;( rp, gp );</span>
+<span class="nc" id="L584">		}</span>
+<span class="nc bnc" id="L585" title="All 2 branches missed.">		else if ( registrationMethod == Method.FAST_TRANSLATION )</span>
+		{
+<span class="nc" id="L587">			final FRGLDMParameters fp = new FRGLDMParameters(model, (float)ratioOfDistance, redundancy);</span>
+<span class="nc" id="L588">			matcher = new FRGLDMPairwise&lt;&gt;( rp, fp );</span>
+<span class="nc" id="L589">		}</span>
+<span class="nc bnc" id="L590" title="All 2 branches missed.">		else if ( registrationMethod == Method.PRECISE_TRANSLATION )</span>
+		{
+<span class="nc" id="L592">			final RGLDMParameters dp = new RGLDMParameters(</span>
+					model,
+					RGLDMParameters.differenceThreshold,
+					(float)ratioOfDistance,
+					limitSearchRadius,
+					searchRadius,
+					numNeighbors,
+					redundancy);
+<span class="nc" id="L600">			matcher = new RGLDMPairwise&lt;&gt;( rp, dp );</span>
+<span class="nc" id="L601">		}</span>
+		else
+		{
+<span class="nc" id="L604">			final IterativeClosestPointParameters ip = new IterativeClosestPointParameters(</span>
+					model,
+					icpMaxDistance,
+					icpMaxIterations,
+					icpUseRANSAC,
+<span class="nc" id="L609">					rp.getMinInlierRatio(),</span>
+<span class="nc" id="L610">					rp.getMaxEpsilon(),</span>
+<span class="nc" id="L611">					rp.getNumIterations(),</span>
+<span class="nc" id="L612">					Math.round( rp.getMinInlierFactor() * model.getMinNumMatches() ) );</span>
+<span class="nc" id="L613">			matcher = new IterativeClosestPointPairwise&lt;&gt;( ip );</span>
+		}
+
+<span class="nc" id="L616">		return matcher;</span>
+	}
+
+	public static HashMap&lt; ViewId, HashMap&lt; String, Double &gt; &gt; buildLabelMap(
+			final SpimData2 data,
+			final List&lt; ViewId &gt; viewIds,
+			final HashMap&lt; String, Double &gt; map )
+	{
+<span class="nc" id="L624">		final HashMap&lt; ViewId, HashMap&lt; String, Double &gt; &gt; labelMapGlobal = new HashMap&lt;&gt;();</span>
+		/*final HashMap&lt; String, Double &gt; map = new HashMap&lt;&gt;();
+
+		for ( int i = 0; i &lt; labels.size(); ++i )
+			map.put( labels.get( i ), 1.0 ); // weights are not relevant during point matching, just for the solver (global opt)
+
+		System.out.println( &quot;labels &amp; weights: &quot; + map);*/
+
+<span class="nc" id="L632">		viewIds.forEach( viewId -&gt;</span>
+		{
+<span class="nc" id="L634">			final ViewInterestPointLists ipl = data.getViewInterestPoints().getViewInterestPointLists( viewId );</span>
+
+			// make sure the label exists for all views that should be processed
+<span class="nc" id="L637">			map.keySet().forEach( label -&gt;</span>
+			{
+<span class="nc bnc" id="L639" title="All 2 branches missed.">				if ( ipl.getInterestPointList( label ) == null )</span>
+				{
+<span class="nc" id="L641">					System.out.println( &quot;Error, label '&quot; + label + &quot;' does for exist for ViewId &quot; + Group.pvid( viewId ) );</span>
+<span class="nc" id="L642">					System.exit( 1 );</span>
+				}
+<span class="nc" id="L644">			});</span>
+
+			// needs to be ViewId, not ViewDescription, then its serializable
+<span class="nc" id="L647">			labelMapGlobal.put( new ViewId( viewId.getTimePointId(), viewId.getViewSetupId() ), map );</span>
+<span class="nc" id="L648">		});</span>
+
+<span class="nc" id="L650">		return labelMapGlobal;</span>
+	}
+
+	public static void main(final String... args) throws SpimDataException
+	{
+<span class="nc" id="L655">		System.out.println(Arrays.toString(args));</span>
+<span class="nc" id="L656">		System.exit(new CommandLine(new SparkGeometricDescriptorMatching()).execute(args));</span>
+<span class="nc" id="L657">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

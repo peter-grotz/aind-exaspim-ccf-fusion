@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>DataTypeUtil.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark.util</a> &gt; <span class="el_source">DataTypeUtil.java</span></div><h1>DataTypeUtil.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark.util;
+
+import org.janelia.saalfeldlab.n5.DataType;
+
+import net.imglib2.type.NativeType;
+import net.imglib2.type.numeric.RealType;
+import net.imglib2.type.numeric.integer.ByteType;
+import net.imglib2.type.numeric.integer.IntType;
+import net.imglib2.type.numeric.integer.LongType;
+import net.imglib2.type.numeric.integer.ShortType;
+import net.imglib2.type.numeric.integer.UnsignedByteType;
+import net.imglib2.type.numeric.integer.UnsignedIntType;
+import net.imglib2.type.numeric.integer.UnsignedLongType;
+import net.imglib2.type.numeric.integer.UnsignedShortType;
+import net.imglib2.type.numeric.real.DoubleType;
+import net.imglib2.type.numeric.real.FloatType;
+
+<span class="nc" id="L39">public class DataTypeUtil {</span>
+
+	@SuppressWarnings(&quot;unchecked&quot;)
+	public static &lt; T extends RealType&lt; T &gt; &amp; NativeType&lt; T &gt; &gt; T toType( final DataType dataType )
+	{
+<span class="nc bnc" id="L44" title="All 2 branches missed.">		if ( dataType == DataType.UINT8 )</span>
+<span class="nc" id="L45">			return (T)(Object)new UnsignedByteType();</span>
+<span class="nc bnc" id="L46" title="All 2 branches missed.">		else if ( dataType == DataType.UINT16 )</span>
+<span class="nc" id="L47">			return (T)(Object)new UnsignedShortType();</span>
+<span class="nc bnc" id="L48" title="All 2 branches missed.">		else if ( dataType == DataType.UINT32 )</span>
+<span class="nc" id="L49">			return (T)(Object)new UnsignedIntType();</span>
+<span class="nc bnc" id="L50" title="All 2 branches missed.">		else if ( dataType == DataType.UINT64 )</span>
+<span class="nc" id="L51">			return (T)(Object)new UnsignedLongType();</span>
+<span class="nc bnc" id="L52" title="All 2 branches missed.">		else if ( dataType == DataType.INT8 )</span>
+<span class="nc" id="L53">			return (T)(Object)new ByteType();</span>
+<span class="nc bnc" id="L54" title="All 2 branches missed.">		else if ( dataType == DataType.INT16 )</span>
+<span class="nc" id="L55">			return (T)(Object)new ShortType();</span>
+<span class="nc bnc" id="L56" title="All 2 branches missed.">		else if ( dataType == DataType.INT32 )</span>
+<span class="nc" id="L57">			return (T)(Object)new IntType();</span>
+<span class="nc bnc" id="L58" title="All 2 branches missed.">		else if ( dataType == DataType.INT64 )</span>
+<span class="nc" id="L59">			return (T)(Object)new LongType();</span>
+<span class="nc bnc" id="L60" title="All 2 branches missed.">		else if ( dataType == DataType.FLOAT32 )</span>
+<span class="nc" id="L61">			return (T)(Object)new FloatType();</span>
+<span class="nc bnc" id="L62" title="All 2 branches missed.">		else if ( dataType == DataType.FLOAT64 )</span>
+<span class="nc" id="L63">			return (T)(Object)new DoubleType();</span>
+		else
+<span class="nc" id="L65">			throw new RuntimeException( &quot;DataType '&quot; + dataType.toString() + &quot;' is unknown.&quot; );</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>OverlappingBlocks.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark.fusion</a> &gt; <span class="el_source">OverlappingBlocks.java</span></div><h1>OverlappingBlocks.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark.fusion;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+
+import mpicbg.spim.data.SpimData;
+import mpicbg.spim.data.sequence.ViewId;
+import net.imglib2.Interval;
+import net.imglib2.util.Intervals;
+import net.preibisch.bigstitcher.spark.util.ViewUtil;
+import net.preibisch.bigstitcher.spark.util.ViewUtil.PrefetchPixel;
+
+/**
+ * Determine which input blocks overlap a given interval using {@link
+ * OverlappingBlocks#find}. Then prefetch those blocks using {@link
+ * OverlappingBlocks#prefetch}.
+ */
+public class OverlappingBlocks
+{
+	/**
+	 * Determine which of the given {@code viewIds} have blocks that overlap
+	 * {@code interval}.
+	 *
+	 * @param data
+	 * 		has all images and transformations
+	 * @param viewIds
+	 * 		which views to check
+	 * @param interval
+	 * 		the interval that will be processed (in world coordinates)
+	 * @return list of views with overlapping blocks, and a prefetcher for those blocks.
+	 */
+	public static OverlappingBlocks find(
+			final SpimData data,
+			final List&lt;ViewId&gt; viewIds,
+			Interval interval )
+	{
+<span class="nc" id="L61">		final List&lt; ViewId &gt; overlapping = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L62">		final List&lt; Callable&lt; Object &gt; &gt; prefetch = new ArrayList&lt;&gt;();</span>
+
+		// expand to be conservative ...
+<span class="nc" id="L65">		final Interval expandedInterval = Intervals.expand( interval, 2 );</span>
+
+<span class="nc bnc" id="L67" title="All 2 branches missed.">		for ( final ViewId viewId : viewIds )</span>
+		{
+<span class="nc" id="L69">			final Interval bounds = ViewUtil.getTransformedBoundingBox( data, viewId );</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">			if ( ViewUtil.overlaps( expandedInterval, bounds ) )</span>
+			{
+				// determine which Cells exactly we need to compute the fused block
+<span class="nc" id="L73">				final List&lt; PrefetchPixel&lt; ? &gt; &gt; blocks = ViewUtil.findOverlappingBlocks( data, viewId, interval );</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">				if ( !blocks.isEmpty() )</span>
+				{
+<span class="nc" id="L76">					prefetch.addAll( blocks );</span>
+<span class="nc" id="L77">					overlapping.add( viewId );</span>
+				}
+			}
+<span class="nc" id="L80">		}</span>
+
+<span class="nc" id="L82">		return new OverlappingBlocks( overlapping, prefetch );</span>
+	}
+
+	/**
+	 * Get the list of views with overlapping blocks.
+	 *
+	 * @return list of views with overlapping blocks
+	 */
+	public List&lt; ViewId &gt; overlappingViews()
+	{
+<span class="nc" id="L92">		return overlappingViews;</span>
+	}
+
+	/**
+	 * Prefetch all overlapping blocks.
+	 * &lt;p&gt;
+	 * The returned {@code AutoCloseable} holds strong reference to all
+	 * prefetched blocks (until it is closed), preventing those blocks
+	 * from being garbage-collected.
+	 *
+	 * @param executor blocks are loaded in parallel using this executor
+	 *
+	 * @return {@code AutoCloseable} that holds strong reference to all prefetched blocks (until it is closed), preventing those blocks from being garbage-collected.
+	 */
+	public AutoCloseable prefetch( final ExecutorService executor ) throws InterruptedException
+	{
+<span class="nc" id="L108">		return new Prefetched( executor.invokeAll( prefetchBlocks ) );</span>
+	}
+
+	private final List&lt; ViewId &gt; overlappingViews;
+
+	private final List&lt; Callable&lt; Object &gt; &gt; prefetchBlocks;
+
+	private OverlappingBlocks(
+			final List&lt; ViewId &gt; overlappingViews,
+			final List&lt; Callable&lt; Object &gt; &gt; prefetchBlocks )
+<span class="nc" id="L118">	{</span>
+<span class="nc" id="L119">		this.overlappingViews = overlappingViews;</span>
+<span class="nc" id="L120">		this.prefetchBlocks = prefetchBlocks;</span>
+<span class="nc" id="L121">	}</span>
+
+<span class="nc" id="L123">	public int numPrefetchBlocks() { return prefetchBlocks.size(); }</span>
+
+	/**
+	 * Result of {@link OverlappingBlocks#prefetch}. Holds strong
+	 * references to prefetched data, until it is {@link #close()
+	 * closed}.
+	 */
+	private static class Prefetched implements AutoCloseable
+	{
+		private final List&lt; Future&lt; Object &gt; &gt; prefetched;
+
+		public Prefetched( final List&lt; Future&lt; Object &gt; &gt; prefetched )
+<span class="nc" id="L135">		{</span>
+<span class="nc" id="L136">			this.prefetched = prefetched;</span>
+<span class="nc" id="L137">		}</span>
+
+		@Override
+		public void close() throws Exception
+		{
+			// let go of references to the prefetched cells
+<span class="nc" id="L143">			prefetched.clear();</span>
+<span class="nc" id="L144">		}</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

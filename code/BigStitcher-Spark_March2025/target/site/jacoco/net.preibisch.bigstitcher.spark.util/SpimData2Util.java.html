@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SpimData2Util.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark.util</a> &gt; <span class="el_source">SpimData2Util.java</span></div><h1>SpimData2Util.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark.util;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Map.Entry;
+
+import org.janelia.saalfeldlab.n5.N5FSReader;
+import org.janelia.saalfeldlab.n5.N5Reader;
+import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
+
+import mpicbg.spim.data.sequence.ViewId;
+import net.imglib2.RandomAccess;
+import net.imglib2.RandomAccessibleInterval;
+import net.imglib2.type.NativeType;
+import net.imglib2.type.numeric.IntegerType;
+import net.imglib2.type.numeric.RealType;
+import net.imglib2.type.numeric.integer.UnsignedLongType;
+import net.imglib2.util.Pair;
+import net.imglib2.util.Util;
+import net.imglib2.util.ValuePair;
+import net.preibisch.mvrecon.fiji.spimdata.interestpoints.CorrespondingInterestPoints;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.grouping.Group;
+
+<span class="nc" id="L47">public class SpimData2Util</span>
+{
+	public static void printCorrespondingInterestPoints(
+			final String n5Dir,
+			final String ipName,
+			final int index ) throws IOException
+	{
+<span class="nc" id="L54">		final N5Reader n5 = new N5FSReader( n5Dir );</span>
+
+<span class="nc" id="L56">		String[] l = n5.list( &quot;/&quot; );</span>
+
+<span class="nc bnc" id="L58" title="All 2 branches missed.">		for ( final String s : l )</span>
+<span class="nc" id="L59">			System.out.println( s );</span>
+
+<span class="nc" id="L61">		final String dataset = l[ index ] + &quot;/&quot; + ipName+ &quot;/correspondences/&quot;;</span>
+
+<span class="nc" id="L63">		final String version = n5.getAttribute(dataset, &quot;correspondences&quot;, String.class );</span>
+<span class="nc" id="L64">		final Map&lt; String, Long &gt; idMap = n5.getAttribute(dataset, &quot;idMap&quot;, Map.class ); // to store ID (viewId.getTimePointId() + &quot;,&quot; + viewId.getViewSetupId() + &quot;,&quot; + label)</span>
+
+<span class="nc" id="L66">		System.out.println( version + &quot;, &quot; + idMap.size() + &quot; correspondence codes&quot; );</span>
+
+<span class="nc bnc" id="L68" title="All 2 branches missed.">		if ( idMap.size() == 0 )</span>
+<span class="nc" id="L69">			return;</span>
+
+<span class="nc" id="L71">		final Map&lt; Long, Pair&lt;ViewId, String&gt; &gt; quickLookup = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L72" title="All 2 branches missed.">		for ( final Entry&lt;String, Long&gt; entry : idMap.entrySet() )</span>
+		{
+<span class="nc" id="L74">			final int firstComma = entry.getKey().indexOf( &quot;,&quot; );</span>
+<span class="nc" id="L75">			final String tp = entry.getKey().substring( 0, firstComma );</span>
+<span class="nc" id="L76">			String remaining = entry.getKey().substring( firstComma + 1, entry.getKey().length() );</span>
+<span class="nc" id="L77">			final int secondComma = remaining.indexOf( &quot;,&quot; );</span>
+<span class="nc" id="L78">			final String setup = remaining.substring( 0, secondComma );</span>
+<span class="nc" id="L79">			final String label = remaining.substring( secondComma + 1, remaining.length() );</span>
+
+<span class="nc" id="L81">			final int tpInt = Integer.parseInt(tp);</span>
+<span class="nc" id="L82">			final int setupInt = Integer.parseInt(setup);</span>
+
+			final long id;
+
+<span class="nc bnc" id="L86" title="All 2 branches missed.">			if ( Double.class.isInstance((Object)entry.getValue()))</span>
+<span class="nc" id="L87">				id = Math.round( (Double)(Object)entry.getValue() ); // TODO: bug, a long maybe loaded as a double</span>
+			else
+<span class="nc" id="L89">				id = entry.getValue();</span>
+
+<span class="nc" id="L91">			final Pair&lt;ViewId, String&gt; value = new ValuePair&lt;&gt;( new ViewId( tpInt, setupInt ), label );</span>
+<span class="nc" id="L92">			quickLookup.put( id , value );</span>
+<span class="nc" id="L93">		}</span>
+
+<span class="nc" id="L95">		quickLookup.forEach( (s,i) -&gt; System.out.println( s + &quot; -&gt; &quot; + Group.pvid( i.getA() ) + &quot;, &quot; + i.getB() ) );</span>
+
+<span class="nc" id="L97">		final RandomAccessibleInterval&lt; UnsignedLongType &gt; data = N5Utils.open(n5, dataset + &quot;/data&quot; );</span>
+<span class="nc" id="L98">		System.out.println( &quot;data: &quot; + Util.printInterval( data ));</span>
+
+<span class="nc" id="L100">		final RandomAccess&lt; UnsignedLongType &gt; corrRA = data.randomAccess();</span>
+
+<span class="nc" id="L102">		corrRA.setPosition( 0, 0 );</span>
+<span class="nc" id="L103">		corrRA.setPosition( 0, 1 );</span>
+
+<span class="nc bnc" id="L105" title="All 2 branches missed.">		for ( int i = 0; i &lt; data.dimension( 1 ); ++ i )</span>
+		{
+<span class="nc" id="L107">			final long idA = corrRA.get().get();</span>
+<span class="nc" id="L108">			corrRA.fwd(0);</span>
+<span class="nc" id="L109">			final long idB = corrRA.get().get();</span>
+<span class="nc" id="L110">			corrRA.fwd(0);</span>
+<span class="nc" id="L111">			final long id = corrRA.get().get();</span>
+
+<span class="nc" id="L113">			corrRA.bck(0);</span>
+<span class="nc" id="L114">			corrRA.bck(0);</span>
+
+<span class="nc bnc" id="L116" title="All 2 branches missed.">			if ( i != data.dimension( 1 ) - 1 )</span>
+<span class="nc" id="L117">				corrRA.fwd( 1 );</span>
+
+			// final int detectionId, final ViewId correspondingViewId, final String correspondingLabel, final int correspondingDetectionId
+<span class="nc" id="L120">			final Pair&lt;ViewId, String&gt; value = quickLookup.get( id );</span>
+<span class="nc" id="L121">			final CorrespondingInterestPoints cip = new CorrespondingInterestPoints( (int)idA, value.getA(), value.getB(), (int)idB );</span>
+
+<span class="nc" id="L123">			System.out.println( &quot;id=&quot; + idA + &quot; ==&gt; &quot; + Group.pvid(value.getA()) + &quot;; label=&quot; + value.getB() + &quot;, id=&quot; + idB );</span>
+		}
+
+		/*
+		final long numCorrespondences = id.dimension( 1 );
+
+
+		for ( long i = 0; i &lt; numPoints; ++i )
+			System.out.println( &quot;id=&quot; + idR.setPositionAndGet( 0, i ) + &quot;, [&quot; + locR.setPositionAndGet( 0, i ) + &quot;, &quot; + locR.setPositionAndGet( 1, i ) + &quot;, &quot; + locR.setPositionAndGet( 2, i ) + &quot;]&quot;);*/
+<span class="nc" id="L132">	}</span>
+
+	public static &lt;S extends NativeType&lt;S&gt; &amp; IntegerType&lt;S&gt;, T extends NativeType&lt;T&gt; &amp; RealType&lt;T&gt;&gt; void printInterestPoints(
+			final String n5Dir,
+			final String ipName,
+			final int index ) throws IOException
+	{
+<span class="nc" id="L139">		final N5Reader n5 = new N5FSReader( n5Dir );</span>
+
+<span class="nc" id="L141">		String[] l = n5.list( &quot;/&quot; );</span>
+
+<span class="nc bnc" id="L143" title="All 2 branches missed.">		for ( final String s : l )</span>
+<span class="nc" id="L144">			System.out.println( s );</span>
+
+<span class="nc" id="L146">		final RandomAccessibleInterval&lt; S &gt; id = N5Utils.open(n5, l[ index ] + &quot;/&quot; + ipName+ &quot;/interestpoints/id&quot; );</span>
+<span class="nc" id="L147">		final RandomAccessibleInterval&lt; T &gt; loc = N5Utils.open(n5, l[ index ] + &quot;/&quot; + ipName + &quot;/interestpoints/loc&quot; );</span>
+
+<span class="nc" id="L149">		System.out.println( &quot;id: &quot; + Util.printInterval( id ));</span>
+<span class="nc" id="L150">		System.out.println( &quot;loc: &quot; + Util.printInterval( loc ));</span>
+
+<span class="nc" id="L152">		final long numPoints = id.dimension( 1 );</span>
+
+<span class="nc" id="L154">		final RandomAccess&lt; S &gt; idR = id.randomAccess();</span>
+<span class="nc" id="L155">		final RandomAccess&lt; T &gt; locR = loc.randomAccess();</span>
+
+<span class="nc" id="L157">		idR.setPosition( new long[] { 0, 0 } );</span>
+<span class="nc" id="L158">		locR.setPosition( new long[] { 0, 0 } );</span>
+
+<span class="nc bnc" id="L160" title="All 2 branches missed.">		for ( long i = 0; i &lt; numPoints; ++i )</span>
+<span class="nc" id="L161">			System.out.println( &quot;id=&quot; + idR.setPositionAndGet( 0, i ) + &quot;, [&quot; + locR.setPositionAndGet( 0, i ) + &quot;, &quot; + locR.setPositionAndGet( 1, i ) + &quot;, &quot; + locR.setPositionAndGet( 2, i ) + &quot;]&quot;);</span>
+<span class="nc" id="L162">	}</span>
+
+	public static void main( String[] args ) throws IOException
+	{
+<span class="nc" id="L166">		printInterestPoints( &quot;/Users/preibischs/Downloads/public-archivedwl-747/interestpoints.n5&quot;, &quot;beads&quot;, 0 );</span>
+
+<span class="nc" id="L168">		printCorrespondingInterestPoints( &quot;/Users/preibischs/Downloads/public-archivedwl-747/interestpoints.n5&quot;, &quot;beads&quot;, 0 );</span>
+
+<span class="nc" id="L170">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

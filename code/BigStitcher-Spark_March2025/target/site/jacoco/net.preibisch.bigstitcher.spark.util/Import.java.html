@@ -1,0 +1,338 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Import.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark.util</a> &gt; <span class="el_source">Import.java</span></div><h1>Import.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark.util;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+
+import mpicbg.spim.data.SpimData;
+import mpicbg.spim.data.sequence.ViewDescription;
+import mpicbg.spim.data.sequence.ViewId;
+import net.preibisch.bigstitcher.spark.SparkAffineFusion.DataTypeFusion;
+import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.boundingbox.BoundingBox;
+import net.preibisch.mvrecon.process.boundingbox.BoundingBoxTools;
+
+<span class="nc" id="L37">public class Import {</span>
+
+	public static BoundingBox getBoundingBox(
+			final SpimData2 data,
+			final List&lt; ViewId &gt; viewIds,
+			final String boundingBoxName )
+			throws IllegalArgumentException
+	{
+<span class="nc" id="L45">		BoundingBox bb = null;</span>
+
+<span class="nc bnc" id="L47" title="All 2 branches missed.">		if ( boundingBoxName == null )</span>
+		{
+<span class="nc" id="L49">			bb = BoundingBoxTools.maximalBoundingBox( data, viewIds, &quot;All Views&quot; );</span>
+		}
+		else
+		{
+<span class="nc" id="L53">			final List&lt;BoundingBox&gt; boxes = BoundingBoxTools.getAllBoundingBoxes( data, null, false );</span>
+
+<span class="nc bnc" id="L55" title="All 2 branches missed.">			for ( final BoundingBox box : boxes )</span>
+<span class="nc bnc" id="L56" title="All 2 branches missed.">				if ( box.getTitle().equals( boundingBoxName ) )</span>
+<span class="nc" id="L57">					bb = box;</span>
+
+<span class="nc bnc" id="L59" title="All 2 branches missed.">			if ( bb == null )</span>
+			{
+<span class="nc" id="L61">				throw new IllegalArgumentException( &quot;Bounding box '&quot; + boundingBoxName + &quot;' not present in XML.&quot; );</span>
+			}
+		}
+
+<span class="nc" id="L65">		return bb;</span>
+	}
+
+	public static void validateInputParameters(
+			final DataTypeFusion datatype,
+			final Double minIntensity,
+			final Double maxIntensity )
+			throws IllegalArgumentException
+	{
+<span class="nc bnc" id="L74" title="All 8 branches missed.">		if ( ( datatype == DataTypeFusion.UINT8 || datatype == DataTypeFusion.UINT16 ) &amp;&amp; (minIntensity == null || maxIntensity == null ) ) {</span>
+<span class="nc" id="L75">			throw new IllegalArgumentException( &quot;When selecting UINT8 or UINT16 you need to specify minIntensity and maxIntensity.&quot; );</span>
+		}
+<span class="nc" id="L77">	}</span>
+
+	public static void validateInputParameters(
+			final String[] vi,
+			final String angleIds, 
+			final String channelIds,
+			final String illuminationIds,
+			final String tileIds,
+			final String timepointIds )
+			throws IllegalArgumentException
+	{
+<span class="nc bnc" id="L88" title="All 12 branches missed.">		if ( vi != null &amp;&amp;</span>
+			 ( angleIds != null || tileIds != null || illuminationIds != null || timepointIds != null || channelIds != null ) ) {
+<span class="nc" id="L90">			throw new IllegalArgumentException( &quot;You can only specify ViewIds (-vi) OR angles, channels, illuminations, tiles, timepoints.&quot; );</span>
+		}
+<span class="nc" id="L92">	}</span>
+
+	public static ArrayList&lt; ViewId &gt; createViewIds(
+			final SpimData data,
+			final String[] vi,
+			final String angleIds, 
+			final String channelIds,
+			final String illuminationIds,
+			final String tileIds,
+			final String timepointIds )
+	{
+		final ArrayList&lt; ViewId &gt; viewIds;
+
+<span class="nc bnc" id="L105" title="All 2 branches missed.">		if ( vi != null )</span>
+		{
+<span class="nc" id="L107">			System.out.println( &quot;Parsing selected ViewIds ... &quot;);</span>
+<span class="nc" id="L108">			ArrayList&lt;ViewId&gt; parsedViews = Import.getViewIds( vi );</span>
+<span class="nc" id="L109">			viewIds = Import.getViewIds( data, parsedViews );</span>
+<span class="nc" id="L110">			System.out.println( &quot;Warning: only &quot; + viewIds.size() + &quot; of &quot; + parsedViews.size() + &quot; that you specified exist and are present.&quot;);</span>
+<span class="nc" id="L111">		}</span>
+<span class="nc bnc" id="L112" title="All 10 branches missed.">		else if ( angleIds != null || tileIds != null || illuminationIds != null || timepointIds != null || channelIds != null )</span>
+		{
+<span class="nc" id="L114">			System.out.print( &quot;Parsing selected angle ids ... &quot;);</span>
+<span class="nc" id="L115">			final HashSet&lt;Integer&gt; a = Import.parseIdList( angleIds );</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">			System.out.println( a != null ? a : &quot;all&quot; );</span>
+
+<span class="nc" id="L118">			System.out.print( &quot;Parsing selected channel ids ... &quot;);</span>
+<span class="nc" id="L119">			final HashSet&lt;Integer&gt; c = Import.parseIdList( channelIds );</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">			System.out.println( c != null ? c : &quot;all&quot; );</span>
+
+<span class="nc" id="L122">			System.out.print( &quot;Parsing selected illumination ids ... &quot;);</span>
+<span class="nc" id="L123">			final HashSet&lt;Integer&gt; i = Import.parseIdList( illuminationIds );</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">			System.out.println( i != null ? i : &quot;all&quot; );</span>
+
+<span class="nc" id="L126">			System.out.print( &quot;Parsing selected tile ids ... &quot;);</span>
+<span class="nc" id="L127">			final HashSet&lt;Integer&gt; ti = Import.parseIdList( tileIds );</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">			System.out.println( ti != null ? ti : &quot;all&quot; );</span>
+
+<span class="nc" id="L130">			System.out.print( &quot;Parsing selected timepoint ids ... &quot;);</span>
+<span class="nc" id="L131">			final HashSet&lt;Integer&gt; tp = Import.parseIdList( timepointIds );</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">			System.out.println( tp != null ? tp : &quot;all&quot; );</span>
+
+<span class="nc" id="L134">			viewIds = Import.getViewIds( data, a, c, i, ti, tp );</span>
+<span class="nc" id="L135">		}</span>
+		else
+		{
+			// get all
+<span class="nc" id="L139">			viewIds = Import.getViewIds( data );</span>
+		}
+
+<span class="nc" id="L142">		return viewIds;</span>
+	}
+
+	public static ArrayList&lt; ViewId &gt; getViewIds( final SpimData data )
+	{
+		// select views to process
+<span class="nc" id="L148">		final ArrayList&lt;ViewId&gt; viewIds = new ArrayList&lt;&gt;(data.getSequenceDescription().getViewDescriptions().values());</span>
+
+		// filter not present ViewIds
+<span class="nc" id="L151">		SpimData2.filterMissingViews( data, viewIds );</span>
+
+<span class="nc" id="L153">		return viewIds;</span>
+	}
+
+	public static ArrayList&lt; ViewId &gt; getViewIds( final SpimData data, final ArrayList&lt;ViewId&gt; vi )
+	{
+		// select views to process
+<span class="nc" id="L159">		final ArrayList&lt; ViewId &gt; viewIds = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L161" title="All 2 branches missed.">		for ( final ViewDescription vd : data.getSequenceDescription().getViewDescriptions().values() )</span>
+		{
+<span class="nc bnc" id="L163" title="All 2 branches missed.">			for ( final ViewId v : vi )</span>
+<span class="nc bnc" id="L164" title="All 4 branches missed.">				if ( vd.getTimePointId() == v.getTimePointId() &amp;&amp; vd.getViewSetupId() == v.getViewSetupId() )</span>
+<span class="nc" id="L165">					viewIds.add( vd );</span>
+<span class="nc" id="L166">		}</span>
+
+		// filter not present ViewIds
+<span class="nc" id="L169">		SpimData2.filterMissingViews( data, viewIds );</span>
+
+<span class="nc" id="L171">		return viewIds;</span>
+	}
+
+	public static ArrayList&lt; ViewId &gt; getViewIds(
+			final SpimData data,
+			final HashSet&lt;Integer&gt; a,
+			final HashSet&lt;Integer&gt; c,
+			final HashSet&lt;Integer&gt; i,
+			final HashSet&lt;Integer&gt; ti,
+			final HashSet&lt;Integer&gt; tp )
+	{
+		// select views to process
+<span class="nc" id="L183">		final ArrayList&lt; ViewId &gt; viewIds = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L185" title="All 2 branches missed.">		for ( final ViewDescription vd : data.getSequenceDescription().getViewDescriptions().values() )</span>
+		{
+<span class="nc bnc" id="L187" title="All 2 branches missed.">			if (</span>
+<span class="nc bnc" id="L188" title="All 4 branches missed.">					( a == null || a.contains( vd.getViewSetup().getAngle().getId() )) &amp;&amp;</span>
+<span class="nc bnc" id="L189" title="All 4 branches missed.">					( c == null || c.contains( vd.getViewSetup().getChannel().getId() )) &amp;&amp;</span>
+<span class="nc bnc" id="L190" title="All 4 branches missed.">					( i == null || i.contains( vd.getViewSetup().getIllumination().getId() )) &amp;&amp;</span>
+<span class="nc bnc" id="L191" title="All 4 branches missed.">					( ti == null || ti.contains( vd.getViewSetup().getTile().getId() )) &amp;&amp;</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">					( tp == null || tp.contains( vd.getTimePointId() )) )</span>
+			{
+<span class="nc" id="L194">				viewIds.add( vd );</span>
+			}
+<span class="nc" id="L196">		}</span>
+
+		// filter not present ViewIds
+<span class="nc" id="L199">		SpimData2.filterMissingViews( data, viewIds );</span>
+
+<span class="nc" id="L201">		return viewIds;</span>
+	}
+
+	public static HashSet&lt; Integer &gt; parseIdList( String idList )
+	{
+<span class="nc bnc" id="L206" title="All 2 branches missed.">		if ( idList == null )</span>
+<span class="nc" id="L207">			return null;</span>
+
+<span class="nc" id="L209">		idList = idList.trim();</span>
+
+<span class="nc bnc" id="L211" title="All 2 branches missed.">		if ( idList.length() == 0 )</span>
+<span class="nc" id="L212">			return null;</span>
+
+<span class="nc" id="L214">		final String[] ids = idList.split( &quot;,&quot; );</span>
+<span class="nc" id="L215">		final HashSet&lt; Integer &gt; hash = new HashSet&lt;&gt;();</span>
+
+<span class="nc bnc" id="L217" title="All 2 branches missed.">		for (final String id : ids) {</span>
+<span class="nc" id="L218">			hash.add(Integer.parseInt(id.trim()));</span>
+		}
+
+<span class="nc" id="L221">		return hash;</span>
+	}
+
+	public static ArrayList&lt;ViewId&gt; getViewIds( final String[] s )
+	{
+<span class="nc" id="L226">		final ArrayList&lt;ViewId&gt; viewIds = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">		for ( final String s0 : s )</span>
+<span class="nc" id="L228">			viewIds.add( getViewId( s0 ) );</span>
+<span class="nc" id="L229">		return viewIds;</span>
+	}
+
+	public static int[] csvStringToIntArray(final String csvString) {
+<span class="nc" id="L233">		return Arrays.stream(csvString.split(&quot;,&quot;)).map( st -&gt; st.trim() ).mapToInt(Integer::parseInt).toArray();</span>
+	}
+
+	public static double[] csvStringToDoubleArray(final String csvString) {
+<span class="nc" id="L237">		return Arrays.stream(csvString.split(&quot;,&quot;)).map( st -&gt; st.trim() ).mapToDouble(Double::parseDouble).toArray();</span>
+	}
+
+	/**
+	 * converts a String like '1,1,1; 2,2,1; 4,4,1; 8,8,2' to downsampling levels in int[][]
+	 * @param csvString
+	 * @return
+	 */
+	public static int[][] csvStringToDownsampling(final String csvString) {
+
+<span class="nc" id="L247">		final String[] split = csvString.split(&quot;;&quot;);</span>
+
+<span class="nc" id="L249">		final int[][] downsampling = new int[split.length][];</span>
+<span class="nc bnc" id="L250" title="All 2 branches missed.">		for ( int i = 0; i &lt; split.length; ++i )</span>
+<span class="nc" id="L251">			downsampling[ i ] = Arrays.stream(split[ i ].split(&quot;,&quot;)).map( st -&gt; st.trim() ).mapToInt(Integer::parseInt).toArray();</span>
+
+<span class="nc" id="L253">		return downsampling;</span>
+	}
+
+	/**
+	 * converts a List of Strings like '[1,1,1][ 2,2,1][ 4,4,1 ][ 8,8,2] to downsampling levels in int[][]
+	 * @param csvString
+	 * @return
+	 */
+	public static int[][] csvStringListToDownsampling(final List&lt;String&gt; csvString)
+	{
+<span class="nc bnc" id="L263" title="All 4 branches missed.">		if ( csvString == null || csvString.size() &lt; 1 )</span>
+		{
+<span class="nc" id="L265">			System.out.println( &quot;List of strings for downsampling is empty/null.&quot;);</span>
+<span class="nc" id="L266">			return null;</span>
+		}
+		
+<span class="nc" id="L269">		final int[][] downsampling = new int[csvString.size()][];</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">		for ( int i = 0; i &lt; csvString.size(); ++i )</span>
+		{
+<span class="nc" id="L272">			downsampling[ i ] = Arrays.stream(csvString.get( i ).split(&quot;,&quot;)).map( st -&gt; st.trim() ).mapToInt(Integer::parseInt).toArray();</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">			if ( downsampling[ i ].length != 3 )</span>
+			{
+<span class="nc" id="L275">				System.out.println( &quot;dimensions of downsampling entry is not 3: &quot; + csvString.get( i ) );</span>
+<span class="nc" id="L276">				return null;</span>
+			}
+		}
+
+<span class="nc bnc" id="L280" title="All 2 branches missed.">		if ( !Arrays.equals( downsampling[ 0 ], new int[] { 1, 1, 1 }))</span>
+		{
+<span class="nc" id="L282">			System.out.println( &quot;first entry is not [1,1,1], but must be: &quot; + csvString.get( 0 ) );</span>
+<span class="nc" id="L283">			return null;</span>
+		}
+
+<span class="nc" id="L286">		return downsampling;</span>
+	}
+
+	/**
+	 * tests that the first downsampling is [1,1,....1]
+	 *
+	 * @param downsampling
+	 * @return
+	 */
+	public static boolean testFirstDownsamplingIsPresent(final int[][] downsampling)
+	{
+<span class="nc bnc" id="L297" title="All 8 branches missed.">		if ( downsampling.length &gt; 0 &amp;&amp; Arrays.stream(downsampling[0]).boxed().anyMatch( n -&gt; n == 1 ) &amp;&amp; Arrays.stream(downsampling[0]).boxed().distinct().count() == 1 )</span>
+<span class="nc" id="L298">			return true;</span>
+		else
+<span class="nc" id="L300">			return false;</span>
+	}
+
+	public static ViewId getViewId(final String bdvString )
+	{
+<span class="nc" id="L305">		final String[] entries = bdvString.trim().split( &quot;,&quot; );</span>
+<span class="nc" id="L306">		final int timepointId = Integer.parseInt( entries[ 0 ].trim() );</span>
+<span class="nc" id="L307">		final int viewSetupId = Integer.parseInt( entries[ 1 ].trim() );</span>
+
+<span class="nc" id="L309">		return new ViewId(timepointId, viewSetupId);</span>
+	}
+
+	/*
+	public static String createBDVPath(final String bdvString, final StorageFormat storageType)
+	{
+		final ViewId viewId = getViewId(bdvString);
+
+		String path = null;
+
+		if ( StorageFormat.N5.equals(storageType) )
+		{
+			path = &quot;setup&quot; + viewId.getViewSetupId() + &quot;/&quot; + &quot;timepoint&quot; + viewId.getTimePointId() + &quot;/s0&quot;;
+		}
+		else if ( StorageFormat.HDF5.equals(storageType) )
+		{
+			path = &quot;t&quot; + String.format(&quot;%05d&quot;, viewId.getTimePointId()) + &quot;/&quot; + &quot;s&quot; + String.format(&quot;%02d&quot;, viewId.getViewSetupId()) + &quot;/0/cells&quot;;
+		}
+		else
+		{
+			new RuntimeException( &quot;BDV-compatible dataset cannot be written for &quot; + storageType + &quot; (yet).&quot;);
+		}
+
+		System.out.println( &quot;Saving BDV-compatible &quot; + storageType + &quot; using ViewSetupId=&quot; + viewId.getViewSetupId() + &quot;, TimepointId=&quot; + viewId.getTimePointId()  );
+		System.out.println( &quot;path=&quot; + path );
+
+		return path;
+	}*/
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

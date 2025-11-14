@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SplitDatasets.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark</a> &gt; <span class="el_source">SplitDatasets.java</span></div><h1>SplitDatasets.java</h1><pre class="source lang-java linenums">package net.preibisch.bigstitcher.spark;
+
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+
+import ij.ImageJ;
+import mpicbg.spim.data.SpimDataException;
+import mpicbg.spim.data.generic.sequence.BasicViewDescription;
+import mpicbg.spim.data.sequence.ViewId;
+import net.imglib2.util.Pair;
+import net.preibisch.bigstitcher.spark.abstractcmdline.AbstractBasic;
+import net.preibisch.bigstitcher.spark.util.Import;
+import net.preibisch.legacy.io.IOFunctions;
+import net.preibisch.mvrecon.fiji.plugin.Split_Views;
+import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.XmlIoSpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.explorer.SelectedViewDescriptionListener;
+import net.preibisch.mvrecon.process.splitting.SplittingTools;
+import net.preibisch.stitcher.gui.StitchingExplorer;
+import picocli.CommandLine;
+import picocli.CommandLine.Option;
+import util.URITools;
+
+<span class="nc" id="L27">public class SplitDatasets extends AbstractBasic</span>
+{
+	private static final long serialVersionUID = -1983886010602093433L;
+
+<span class="nc" id="L31">	@Option(names = { &quot;-xo&quot;, &quot;--xmlout&quot; }, description = &quot;path to the output BigStitcher xml, e.g. /home/project-n5.xml or s3://myBucket/dataset.xml (default: overwrite input)&quot;)</span>
+	private String xmlOutURIString = null;
+
+<span class="nc" id="L34">	@Option(names = { &quot;-tis&quot;, &quot;--targetImageSize&quot; }, required = true, description = &quot;target image size after splitting e.g.: 512,512,256&quot;)</span>
+	private String targetImageSizeString = null;
+
+<span class="nc" id="L37">	@Option(names = { &quot;-to&quot;, &quot;--targetOverlap&quot; }, required = true, description = &quot;target overlap after splitting e.g.: 32,32,32&quot;)</span>
+	private String targetOverlapString = null;
+
+<span class="nc" id="L40">	@Option(names = { &quot;--disableOptimization&quot; }, description = &quot;do not optimize image size and overlap&quot;)</span>
+	private boolean disableOptimization = false;
+
+<span class="nc" id="L43">	@Option(names = { &quot;-fip&quot;, &quot;--fakeInterestPoints&quot; }, description = &quot;add fake interest points to overlapping regions of split images/views&quot;)</span>
+	private boolean fakeInterestPoints = false;
+
+<span class="nc" id="L46">	@Option(names = { &quot;--fipDensity&quot; }, description = &quot;density of fake interest points; number of points per 100x100x100 px volume (default: 100.0)&quot;)</span>
+	private double fipDensity = 100.0;
+
+<span class="nc" id="L49">	@Option(names = { &quot;--fipMinNumPoints&quot; }, description = &quot;minimal number of fake interest points per overlap (default: 20)&quot;)</span>
+	private int fipMinNumPoints = 20;
+
+<span class="nc" id="L52">	@Option(names = { &quot;--fipMaxNumPoints&quot; }, description = &quot;maximal number of fake interest points per overlap (default: 500)&quot;)</span>
+	private int fipMaxNumPoints = 500;
+
+<span class="nc" id="L55">	@Option(names = { &quot;--fipError&quot; }, description = &quot;artificial error for fake corresponding interest points (default: 0.5)&quot;)</span>
+	private double fipError = 0.5;
+
+<span class="nc" id="L58">	@Option(names = { &quot;--fipExclusionRadius&quot; }, description = &quot;exclusion radius for fake interest points; to not put them close to existing points (default: 20)&quot;)</span>
+	private double fipExclusionRadius = 20.0;
+
+<span class="nc" id="L61">	@Option(names = { &quot;--assignIlluminations&quot; }, description = &quot;assign old tile id's as illumination id's, this can be great for visualization&quot;)</span>
+	private boolean assignIlluminations = false;
+
+<span class="nc" id="L64">	@Option(names = { &quot;--displayResult&quot; }, description = &quot;display the result, do not save (you can still click save in the GUI that will pop up&quot;)</span>
+	private boolean displayResult = false;
+
+
+<span class="nc" id="L68">	private URI xmlOutURI = null;</span>
+
+	protected SpimData2 dataGlobal;
+	protected ArrayList&lt; ViewId &gt; viewIdsGlobal;
+
+	@Override
+	public Void call() throws Exception
+	{
+<span class="nc" id="L76">		this.setRegion();</span>
+
+		// if we want to display the result, we need to set the fetcher threads to anything but 0
+<span class="nc bnc" id="L79" title="All 2 branches missed.">		this.dataGlobal = displayResult ? this.loadSpimData2( Runtime.getRuntime().availableProcessors() ) : this.loadSpimData2();</span>
+
+<span class="nc bnc" id="L81" title="All 2 branches missed.">		if ( dataGlobal == null )</span>
+<span class="nc" id="L82">			throw new IllegalArgumentException( &quot;Couldn't load SpimData XML project.&quot; );</span>
+
+<span class="nc bnc" id="L84" title="All 2 branches missed.">		if ( xmlOutURIString == null )</span>
+<span class="nc" id="L85">			xmlOutURI = xmlURI;</span>
+		else
+<span class="nc" id="L87">			xmlOutURI = URITools.toURI( xmlOutURIString );</span>
+
+<span class="nc" id="L89">		System.out.println( &quot;xmlout: &quot; + xmlOutURI );</span>
+
+<span class="nc" id="L91">		final int[] targetImageSize = Import.csvStringToIntArray(targetImageSizeString);</span>
+<span class="nc" id="L92">		final int[] targetOverlap = Import.csvStringToIntArray(targetOverlapString);</span>
+
+<span class="nc" id="L94">		final Pair&lt; HashMap&lt; String, Integer &gt;, long[] &gt; imgSizes = Split_Views.collectImageSizes( this.dataGlobal );</span>
+
+<span class="nc" id="L96">		System.out.println( &quot;Current image sizes of dataset:&quot;);</span>
+
+<span class="nc bnc" id="L98" title="All 2 branches missed.">		for ( final String size : imgSizes.getA().keySet() )</span>
+<span class="nc" id="L99">			IOFunctions.println( imgSizes.getA().get( size ) + &quot;x: &quot; + size );</span>
+
+<span class="nc" id="L101">		final long[] minStepSize = Split_Views.findMinStepSize( this.dataGlobal );</span>
+
+<span class="nc" id="L103">		System.out.println( &quot;Target image sizes and overlaps need be adjusted to be divisible by &quot; + Arrays.toString( minStepSize ) );</span>
+
+<span class="nc" id="L105">		final long sx = Split_Views.closestLargerLongDivisableBy( targetImageSize[ 0 ], minStepSize[ 0 ] );</span>
+<span class="nc" id="L106">		final long sy = Split_Views.closestLargerLongDivisableBy( targetImageSize[ 1 ], minStepSize[ 1 ] );</span>
+<span class="nc" id="L107">		final long sz = Split_Views.closestLargerLongDivisableBy( targetImageSize[ 2 ], minStepSize[ 2 ] );</span>
+
+<span class="nc" id="L109">		final long ox = Split_Views.closestLargerLongDivisableBy( targetOverlap[ 0 ], minStepSize[ 0 ] );</span>
+<span class="nc" id="L110">		final long oy = Split_Views.closestLargerLongDivisableBy( targetOverlap[ 1 ], minStepSize[ 1 ] );</span>
+<span class="nc" id="L111">		final long oz = Split_Views.closestLargerLongDivisableBy( targetOverlap[ 2 ], minStepSize[ 2 ] );</span>
+
+<span class="nc" id="L113">		System.out.println( &quot;Adjusted target image size: [&quot; + sx + &quot;, &quot; + sy + &quot;, &quot; + sz + &quot;]&quot; );</span>
+<span class="nc" id="L114">		System.out.println( &quot;Adjusted target overlap: [&quot; + ox + &quot;, &quot; + oy + &quot;, &quot; + oz + &quot;]&quot; );</span>
+
+<span class="nc bnc" id="L116" title="All 6 branches missed.">		if ( ox &gt; sx || oy &gt; sy || oz &gt; sz )</span>
+		{
+<span class="nc" id="L118">			System.out.println( &quot;overlap cannot be bigger than size.&quot; );</span>
+<span class="nc" id="L119">			return null;</span>
+		}
+
+<span class="nc bnc" id="L122" title="All 2 branches missed.">		final SpimData2 newData = SplittingTools.splitImages(</span>
+				this.dataGlobal, new long[]{ ox, oy, oz }, new long[]{ sx, sy, sz }, minStepSize, assignIlluminations,
+				!disableOptimization, fakeInterestPoints, fipDensity, fipMinNumPoints, fipMaxNumPoints, fipError, fipExclusionRadius );
+
+<span class="nc bnc" id="L126" title="All 2 branches missed.">		if ( displayResult )</span>
+		{
+<span class="nc" id="L128">			new ImageJ();</span>
+
+<span class="nc" id="L130">			final StitchingExplorer&lt; SpimData2 &gt; explorer = new StitchingExplorer&lt; &gt;( newData, xmlOutURI, new XmlIoSpimData2() );</span>
+<span class="nc" id="L131">			explorer.getFrame().toFront();</span>
+
+<span class="nc" id="L133">			explorer.addListener( new SelectedViewDescriptionListener&lt;SpimData2&gt;() {</span>
+				
+				@Override
+<span class="nc" id="L136">				public void updateContent(SpimData2 data) {}</span>
+				
+				@Override
+<span class="nc" id="L139">				public void selectedViewDescriptions(List&lt;List&lt;BasicViewDescription&lt;?&gt;&gt;&gt; viewDescriptions) {}</span>
+				
+				@Override
+<span class="nc" id="L142">				public void save() {}</span>
+				
+				@Override
+				public void quit()
+				{
+<span class="nc" id="L147">					System.out.println( &quot;quitting GUI.&quot;);</span>
+<span class="nc" id="L148">					System.exit( 0 );</span>
+<span class="nc" id="L149">				}</span>
+			});
+
+			// program will be quit by the listener above
+			try
+			{
+<span class="nc" id="L155">				Thread.sleep( Long.MAX_VALUE );</span>
+			}
+<span class="nc" id="L157">			catch ( final InterruptedException e )</span>
+			{
+<span class="nc" id="L159">				System.err.println( &quot;MultiThreading.threadWait(): Thread woken up: &quot; + e );</span>
+<span class="nc" id="L160">			}</span>
+<span class="nc" id="L161">		}</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">		else if ( !dryRun )</span>
+		{
+<span class="nc" id="L164">			new XmlIoSpimData2().save( newData, xmlOutURI );</span>
+		}
+
+<span class="nc" id="L167">		return null;</span>
+	}
+
+	public static void main(final String... args) throws SpimDataException
+	{
+<span class="nc" id="L172">		System.out.println(Arrays.toString(args));</span>
+<span class="nc" id="L173">		System.exit(new CommandLine(new SplitDatasets()).execute(args));</span>
+<span class="nc" id="L174">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

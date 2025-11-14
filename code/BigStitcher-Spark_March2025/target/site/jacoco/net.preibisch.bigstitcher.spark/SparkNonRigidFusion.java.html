@@ -1,0 +1,457 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SparkNonRigidFusion.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark</a> &gt; <span class="el_source">SparkNonRigidFusion.java</span></div><h1>SparkNonRigidFusion.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark;
+
+import java.io.IOException;
+import java.io.Serializable;
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+
+import org.apache.hadoop.fs.StorageType;
+import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.janelia.saalfeldlab.n5.Compression;
+import org.janelia.saalfeldlab.n5.DataType;
+import org.janelia.saalfeldlab.n5.GzipCompression;
+import org.janelia.saalfeldlab.n5.N5FSWriter;
+import org.janelia.saalfeldlab.n5.N5Writer;
+import org.janelia.saalfeldlab.n5.hdf5.N5HDF5Writer;
+import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
+import org.janelia.saalfeldlab.n5.universe.N5Factory.StorageFormat;
+import org.janelia.saalfeldlab.n5.zarr.N5ZarrWriter;
+import org.janelia.scicomp.n5.zstandard.ZstandardCompression;
+
+import mpicbg.spim.data.SpimDataException;
+import mpicbg.spim.data.sequence.ViewId;
+import net.imglib2.FinalInterval;
+import net.imglib2.Interval;
+import net.imglib2.RandomAccessibleInterval;
+import net.imglib2.converter.Converters;
+import net.imglib2.parallel.SequentialExecutorService;
+import net.imglib2.type.numeric.integer.ShortType;
+import net.imglib2.type.numeric.integer.UnsignedByteType;
+import net.imglib2.type.numeric.integer.UnsignedShortType;
+import net.imglib2.type.numeric.real.FloatType;
+import net.imglib2.util.Intervals;
+import net.imglib2.util.Util;
+import net.preibisch.bigstitcher.spark.SparkAffineFusion.DataTypeFusion;
+import net.preibisch.bigstitcher.spark.abstractcmdline.AbstractSelectableViews;
+import net.preibisch.bigstitcher.spark.util.BDVSparkInstantiateViewSetup;
+import net.preibisch.bigstitcher.spark.util.Import;
+import net.preibisch.bigstitcher.spark.util.N5Util;
+import net.preibisch.bigstitcher.spark.util.Spark;
+import net.preibisch.bigstitcher.spark.util.ViewUtil;
+import net.preibisch.mvrecon.fiji.plugin.fusion.FusionGUI.FusionType;
+import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.boundingbox.BoundingBox;
+import net.preibisch.mvrecon.process.fusion.transformed.nonrigid.NonRigidTools;
+import net.preibisch.mvrecon.process.n5api.N5ApiTools;
+import net.preibisch.mvrecon.process.n5api.SpimData2Tools;
+import net.preibisch.mvrecon.process.n5api.SpimData2Tools.InstantiateViewSetup;
+import picocli.CommandLine;
+import picocli.CommandLine.Option;
+import util.Grid;
+import util.URITools;
+
+<span class="nc" id="L80">public class SparkNonRigidFusion extends AbstractSelectableViews implements Callable&lt;Void&gt;, Serializable</span>
+{
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = 385486695284409953L;
+
+<span class="nc" id="L87">	@Option(names = { &quot;-o&quot;, &quot;--n5Path&quot; }, required = true, description = &quot;N5/ZARR/HDF5 basse path for saving (must be combined with the option '-d' or '--bdv'), e.g. -o /home/fused.n5 or e.g. s3://myBucket/data.n5&quot;)</span>
+	private String n5PathURIString = null;
+
+<span class="nc" id="L90">	@Option(names = { &quot;-d&quot;, &quot;--n5Dataset&quot; }, required = true, description = &quot;N5 dataset - it is highly recommended to add s0 to be able to compute a multi-resolution pyramid later, e.g. /ch488/s0&quot;)</span>
+	private String n5Dataset = null;
+
+<span class="nc" id="L93">	@Option(names = { &quot;--bdv&quot; }, required = false, description = &quot;Write a BigDataViewer-compatible dataset specifying TimepointID, ViewSetupId, e.g. -b 0,0 or -b 4,1&quot;)</span>
+	private String bdvString = null;
+
+<span class="nc" id="L96">	@Option(names = { &quot;-xo&quot;, &quot;--xmlout&quot; }, required = false, description = &quot;path to the new BigDataViewer xml project (only valid if --bdv was selected), &quot;</span>
+			+ &quot;e.g. -xo /home/project.xml or -xo s3://myBucket/project.xml (default: dataset.xml in basepath for H5, dataset.xml one directory level above basepath for N5)&quot;)
+	private String xmlOutURIString = null;
+
+<span class="nc" id="L100">	@Option(names = {&quot;-s&quot;, &quot;--storage&quot;}, defaultValue = &quot;N5&quot;, showDefaultValue = CommandLine.Help.Visibility.ALWAYS,</span>
+			description = &quot;Dataset storage type, currently supported N5, ZARR (and ONLY for local, multithreaded Spark: HDF5)&quot;)
+	private StorageFormat storageType = null;
+
+<span class="nc" id="L104">	@Option(names = &quot;--blockSize&quot;, description = &quot;blockSize, you can use smaller blocks for HDF5 (default: 128,128,128)&quot;)</span>
+	private String blockSizeString = &quot;128,128,128&quot;;
+
+<span class="nc" id="L107">	@Option(names = &quot;--blockScale&quot;, description = &quot;how many blocks to use for a single processing step, e.g. 4,4,1 means for blockSize a 128,128,64 that each spark thread writes 512,512,64 (default: 2,2,1)&quot;)</span>
+	private String blockScaleString = &quot;2,2,1&quot;;
+
+<span class="nc" id="L110">	@Option(names = { &quot;-b&quot;, &quot;--boundingBox&quot; }, description = &quot;fuse a specific bounding box listed in the XML (default: fuse everything)&quot;)</span>
+	private String boundingBoxName = null;
+
+<span class="nc" id="L113">	@Option(names = { &quot;-ip&quot;, &quot;--interestPoints&quot; }, required = true, description = &quot;provide a list of corresponding interest points to be used for the fusion (e.g. -ip 'beads' -ip 'nuclei'&quot;)</span>
+	private ArrayList&lt;String&gt; interestPoints = null;
+
+<span class="nc" id="L116">	@Option(names = {&quot;-p&quot;, &quot;--dataType&quot;}, defaultValue = &quot;FLOAT32&quot;, showDefaultValue = CommandLine.Help.Visibility.ALWAYS,</span>
+			description = &quot;Data type, UINT8 [0...255], UINT16 [0...65535] and FLOAT32 are supported, when choosing UINT8 or UINT16 you must define min and max intensity (default: FLOAT32)&quot;)
+	private DataTypeFusion dataTypeFusion = null;
+
+<span class="nc" id="L120">	@Option(names = { &quot;--minIntensity&quot; }, description = &quot;min intensity for scaling values to the desired range (required for UINT8 and UINT16), e.g. 0.0&quot;)</span>
+	private Double minIntensity = null;
+
+<span class="nc" id="L123">	@Option(names = { &quot;--maxIntensity&quot; }, description = &quot;max intensity for scaling values to the desired range (required for UINT8 and UINT16), e.g. 2048.0&quot;)</span>
+	private Double maxIntensity = null;
+
+<span class="nc" id="L126">	URI n5PathURI = null, xmlOutURI = null;</span>
+
+	@Override
+	public Void call() throws Exception
+	{
+<span class="nc" id="L131">		this.setRegion();</span>
+
+<span class="nc bnc" id="L133" title="All 2 branches missed.">		if (dryRun)</span>
+		{
+<span class="nc" id="L135">			System.out.println( &quot;dry-run not supported for non-rigid fusion.&quot;);</span>
+<span class="nc" id="L136">			System.exit( 0 );</span>
+		}
+
+<span class="nc bnc" id="L139" title="All 8 branches missed.">		if ( (this.n5Dataset == null &amp;&amp; this.bdvString == null) || (this.n5Dataset != null &amp;&amp; this.bdvString != null) )</span>
+		{
+<span class="nc" id="L141">			System.out.println( &quot;You must define either the n5dataset (e.g. -d /ch488/s0) OR the BigDataViewer specification (e.g. --bdv 0,1)&quot;);</span>
+<span class="nc" id="L142">			System.exit( 0 );</span>
+		}
+
+<span class="nc bnc" id="L145" title="All 4 branches missed.">		if ( this.bdvString != null &amp;&amp; xmlOutURIString == null )</span>
+		{
+<span class="nc" id="L147">			System.out.println( &quot;Please specify the output XML for the BDV dataset: -xo&quot;);</span>
+<span class="nc" id="L148">			return null;</span>
+		}
+
+<span class="nc" id="L151">		Import.validateInputParameters(dataTypeFusion, minIntensity, maxIntensity);</span>
+
+<span class="nc" id="L153">		final SpimData2 dataGlobal = this.loadSpimData2();</span>
+
+<span class="nc bnc" id="L155" title="All 2 branches missed.">		if ( dataGlobal == null )</span>
+<span class="nc" id="L156">			return null;</span>
+
+<span class="nc" id="L158">		final ArrayList&lt; ViewId &gt; viewIdsGlobal = this.loadViewIds( dataGlobal );</span>
+
+<span class="nc bnc" id="L160" title="All 4 branches missed.">		if ( viewIdsGlobal == null || viewIdsGlobal.size() == 0 )</span>
+<span class="nc" id="L161">			return null;</span>
+
+<span class="nc bnc" id="L163" title="All 4 branches missed.">		if ( interestPoints == null || interestPoints.size() == 0 )</span>
+		{
+<span class="nc" id="L165">			throw new IllegalArgumentException( &quot;no interest points defined, exiting.&quot;);</span>
+		}
+
+<span class="nc bnc" id="L168" title="All 2 branches missed.">		for ( final String ip : interestPoints )</span>
+<span class="nc" id="L169">			System.out.println( &quot;nonrigid using interestpoint label: &quot; + ip );</span>
+
+<span class="nc" id="L171">		final BoundingBox bb = Import.getBoundingBox( dataGlobal, viewIdsGlobal, boundingBoxName );</span>
+
+<span class="nc" id="L173">		this.n5PathURI = URITools.toURI( n5PathURIString );</span>
+<span class="nc" id="L174">		System.out.println( &quot;Fused volume: &quot; + n5PathURI );</span>
+
+<span class="nc bnc" id="L176" title="All 2 branches missed.">		if ( this.bdvString != null )</span>
+		{
+<span class="nc" id="L178">			this.xmlOutURI = URITools.toURI( xmlOutURIString );</span>
+<span class="nc" id="L179">			System.out.println( &quot;XML: &quot; + xmlOutURI );</span>
+		}
+
+<span class="nc" id="L182">		final int[] blockSize = Import.csvStringToIntArray(blockSizeString);</span>
+<span class="nc" id="L183">		final int[] blocksPerJob = Import.csvStringToIntArray(blockScaleString);</span>
+<span class="nc" id="L184">		System.out.println( &quot;Fusing: &quot; + bb.getTitle() + &quot;: &quot; + Util.printInterval( bb ) +</span>
+<span class="nc" id="L185">				&quot; with blocksize &quot; + Util.printCoordinates( blockSize ) + &quot; and &quot; + Util.printCoordinates( blocksPerJob ) + &quot; blocks per job&quot; );</span>
+
+		final DataType dataType;
+
+<span class="nc bnc" id="L189" title="All 2 branches missed.">		if ( dataTypeFusion == DataTypeFusion.UINT8 )</span>
+		{
+<span class="nc" id="L191">			System.out.println( &quot;Fusing to UINT8, min intensity = &quot; + minIntensity + &quot;, max intensity = &quot; + maxIntensity );</span>
+<span class="nc" id="L192">			dataType = DataType.UINT8;</span>
+		}
+<span class="nc bnc" id="L194" title="All 2 branches missed.">		else if ( dataTypeFusion == DataTypeFusion.UINT16 )</span>
+		{
+<span class="nc" id="L196">			System.out.println( &quot;Fusing to UINT16, min intensity = &quot; + minIntensity + &quot;, max intensity = &quot; + maxIntensity );</span>
+<span class="nc" id="L197">			dataType = DataType.UINT16;</span>
+		}
+		else
+		{
+<span class="nc" id="L201">			System.out.println( &quot;Fusing to FLOAT32&quot; );</span>
+<span class="nc" id="L202">			dataType = DataType.FLOAT32;</span>
+		}
+
+<span class="nc" id="L205">		final long[] dimensions = bb.dimensionsAsLongArray();</span>
+<span class="nc" id="L206">		final long[] min = bb.minAsLongArray();</span>
+
+		
+		//
+		// final variables for Spark
+		//
+<span class="nc" id="L212">		final URI n5PathURI = this.n5PathURI;</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">		final String n5Dataset = this.n5Dataset != null ? this.n5Dataset : N5ApiTools.createBDVPath( this.bdvString, 0, this.storageType );</span>
+<span class="nc" id="L214">		final URI xmlURI = this.xmlURI;</span>
+<span class="nc" id="L215">		final URI xmloutURI = this.xmlOutURI;</span>
+<span class="nc" id="L216">		final StorageFormat storageType = this.storageType;</span>
+<span class="nc" id="L217">		final Compression compression = new ZstandardCompression( 3 );</span>
+
+<span class="nc" id="L219">		final ArrayList&lt; String &gt; labels = new ArrayList&lt;&gt;(interestPoints);</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">		final boolean uint8 = (dataTypeFusion == DataTypeFusion.UINT8);</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">		final boolean uint16 = (dataTypeFusion == DataTypeFusion.UINT16);</span>
+<span class="nc bnc" id="L222" title="All 4 branches missed.">		final double minIntensity = (uint8 || uint16 ) ? this.minIntensity : 0;</span>
+		final double range;
+<span class="nc bnc" id="L224" title="All 2 branches missed.">		if ( uint8 )</span>
+<span class="nc" id="L225">			range = ( this.maxIntensity - this.minIntensity ) / 255.0;</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">		else if ( uint16 )</span>
+<span class="nc" id="L227">			range = ( this.maxIntensity - this.minIntensity ) / 65535.0;</span>
+		else
+<span class="nc" id="L229">			range = 0;</span>
+<span class="nc" id="L230">		final int[][] serializedViewIds = Spark.serializeViewIds(viewIdsGlobal);</span>
+
+		try
+		{
+			// trigger the N5-blosc error, because if it is triggered for the first
+			// time inside Spark, everything crashes
+<span class="nc" id="L236">			new N5FSWriter(null);</span>
+		}
+<span class="nc" id="L238">		catch (Exception e ) {}</span>
+
+<span class="nc" id="L240">		System.out.println( &quot;Format being written: &quot; + storageType );</span>
+
+<span class="nc" id="L242">		final N5Writer driverVolumeWriter = N5Util.createN5Writer(n5PathURI, storageType);</span>
+
+<span class="nc bnc" id="L244" title="All 2 branches missed.">		if ( driverVolumeWriter == null )</span>
+<span class="nc" id="L245">			return null;</span>
+
+<span class="nc" id="L247">		driverVolumeWriter.createDataset(</span>
+				n5Dataset,
+				dimensions,
+				blockSize,
+				dataType,
+				compression );
+
+		// using bigger blocksizes than being stored for efficiency (needed for very large datasets)
+<span class="nc" id="L255">		final int[] superBlockSize = new int[ 3 ];</span>
+<span class="nc" id="L256">		Arrays.setAll( superBlockSize, d -&gt; blockSize[ d ] * blocksPerJob[ d ] );</span>
+<span class="nc" id="L257">		final List&lt;long[][]&gt; grid = Grid.create(dimensions,</span>
+				superBlockSize,
+				blockSize);
+
+<span class="nc" id="L261">		System.out.println( &quot;numJobs = &quot; + grid.size() );</span>
+
+<span class="nc" id="L263">		driverVolumeWriter.setAttribute( n5Dataset, &quot;offset&quot;, min);</span>
+
+		// saving metadata if it is bdv-compatible (we do this first since it might fail)
+<span class="nc bnc" id="L266" title="All 2 branches missed.">		if ( bdvString != null )</span>
+		{
+			// TODO: support create downsampling pyramids, null is fine for now
+<span class="nc" id="L269">			final int[][] downsamplings = null;</span>
+
+			// A Functional Interface that converts a ViewId to a ViewSetup, only called if the ViewSetup does not exist
+<span class="nc" id="L272">			final InstantiateViewSetup instantiate =</span>
+					new BDVSparkInstantiateViewSetup( angleIds, illuminationIds, channelIds, tileIds );
+
+<span class="nc" id="L275">			final ViewId viewId = Import.getViewId( bdvString );</span>
+
+			try
+			{
+<span class="nc bnc" id="L279" title="All 2 branches missed.">				if ( SpimData2Tools.writeBDVMetaData(</span>
+						driverVolumeWriter,
+						storageType,
+						dataType,
+						dimensions,
+						compression,
+						blockSize,
+						downsamplings,
+						viewId,
+						n5PathURI,
+						xmloutURI,
+						instantiate ) == null )
+				{
+<span class="nc" id="L292">					System.out.println( &quot;Failed to write metadata for '&quot; + n5Dataset + &quot;'.&quot; );</span>
+<span class="nc" id="L293">					return null;</span>
+				}
+			}
+<span class="nc" id="L296">			catch (SpimDataException | IOException e)</span>
+			{
+<span class="nc" id="L298">				e.printStackTrace();</span>
+<span class="nc" id="L299">				System.out.println( &quot;Failed to write metadata for '&quot; + n5Dataset + &quot;': &quot; + e );</span>
+<span class="nc" id="L300">				return null;</span>
+<span class="nc" id="L301">			}</span>
+
+<span class="nc" id="L303">			System.out.println( &quot;Done writing BDV metadata.&quot;);</span>
+		}
+
+<span class="nc" id="L306">		final SparkConf conf = new SparkConf().setAppName(&quot;NonRigidFusion&quot;);</span>
+
+<span class="nc bnc" id="L308" title="All 2 branches missed.">		if (localSparkBindAddress)</span>
+<span class="nc" id="L309">			conf.set(&quot;spark.driver.bindAddress&quot;, &quot;127.0.0.1&quot;);</span>
+
+<span class="nc" id="L311">		final JavaSparkContext sc = new JavaSparkContext(conf);</span>
+<span class="nc" id="L312">		sc.setLogLevel(&quot;ERROR&quot;);</span>
+
+<span class="nc" id="L314">		final JavaRDD&lt;long[][]&gt; rdd = sc.parallelize( grid ).repartition( Math.min( Spark.maxPartitions, grid.size() ) );</span>
+
+<span class="nc" id="L316">		final long time = System.currentTimeMillis();</span>
+
+<span class="nc" id="L318">		rdd.foreach(</span>
+				gridBlock -&gt; {
+<span class="nc" id="L320">					final SpimData2 dataLocal = Spark.getSparkJobSpimData2( xmlURI );</span>
+
+					// be smarter, test which ViewIds are actually needed for the block we want to fuse
+<span class="nc" id="L323">					final Interval fusedBlock =</span>
+<span class="nc" id="L324">							Intervals.translate(</span>
+<span class="nc" id="L325">									Intervals.translate(</span>
+											new FinalInterval( gridBlock[1] ), // blocksize
+											gridBlock[0] ), // block offset
+									min ); // min of the randomaccessbileinterval
+
+					// recover views to process
+<span class="nc" id="L331">					final List&lt; ViewId &gt; viewsToFuse = new ArrayList&lt;&gt;(); // fuse</span>
+<span class="nc" id="L332">					final List&lt; ViewId &gt; allViews = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L334" title="All 2 branches missed.">					for ( int i = 0; i &lt; serializedViewIds.length; ++i )</span>
+					{
+<span class="nc" id="L336">						final ViewId viewId = Spark.deserializeViewIds(serializedViewIds, i);</span>
+
+						// expand by 50 to be conservative for non-rigid overlaps
+<span class="nc" id="L339">						final Interval boundingBox = ViewUtil.getTransformedBoundingBox( dataLocal, viewId );</span>
+<span class="nc" id="L340">						final Interval bounds = Intervals.expand( boundingBox, 50 );</span>
+						// TODO: estimate the &quot;50&quot; from the distance of corresponding, transformed interest points
+
+<span class="nc bnc" id="L343" title="All 2 branches missed.">						if ( ViewUtil.overlaps( fusedBlock, bounds ) )</span>
+<span class="nc" id="L344">							viewsToFuse.add( viewId );</span>
+
+<span class="nc" id="L346">						allViews.add( viewId );</span>
+					}
+
+					// nothing to save...
+<span class="nc bnc" id="L350" title="All 2 branches missed.">					if ( viewsToFuse.size() == 0 )</span>
+<span class="nc" id="L351">						return;</span>
+
+					// test with which views the viewsToFuse overlap
+					// TODO: use the actual interest point correspondences maybe (i.e. change in mvr)
+<span class="nc" id="L355">					final List&lt; ViewId &gt; viewsToUse = new ArrayList&lt;&gt;(); // used to compute the non-rigid transform</span>
+
+<span class="nc bnc" id="L357" title="All 2 branches missed.">					for ( final ViewId viewId : allViews )</span>
+					{
+<span class="nc" id="L359">						final Interval boundingBoxView = ViewUtil.getTransformedBoundingBox( dataLocal, viewId );</span>
+<span class="nc" id="L360">						final Interval boundsView = Intervals.expand( boundingBoxView, 25 );</span>
+
+<span class="nc bnc" id="L362" title="All 2 branches missed.">						for ( final ViewId fusedId : viewsToFuse )</span>
+						{
+<span class="nc" id="L364">							final Interval boundingBoxFused = ViewUtil.getTransformedBoundingBox( dataLocal, fusedId );</span>
+<span class="nc" id="L365">							final Interval boundsFused = Intervals.expand( boundingBoxFused, 25 );</span>
+							
+<span class="nc bnc" id="L367" title="All 2 branches missed.">							if ( ViewUtil.overlaps( boundsView, boundsFused ))</span>
+							{
+<span class="nc" id="L369">								viewsToUse.add( viewId );</span>
+<span class="nc" id="L370">								break;</span>
+							}
+<span class="nc" id="L372">						}</span>
+<span class="nc" id="L373">					}</span>
+
+<span class="nc" id="L375">					final double downsampling = Double.NaN;</span>
+<span class="nc" id="L376">					final double ds = 1.0;</span>
+<span class="nc" id="L377">					final int cpd = Math.max( 1, (int)Math.round( 10 / ds ) );</span>
+
+<span class="nc" id="L379">					final int interpolation = 1;</span>
+<span class="nc" id="L380">					final long[] controlPointDistance = new long[] { cpd, cpd, cpd };</span>
+<span class="nc" id="L381">					final double alpha = 1.0;</span>
+<span class="nc" id="L382">					final boolean virtualGrid = false;</span>
+
+<span class="nc" id="L384">					final FusionType fusionType = FusionType.AVG_BLEND;</span>
+<span class="nc" id="L385">					final boolean displayDistances = false;</span>
+
+<span class="nc" id="L387">					final ExecutorService service = new SequentialExecutorService();</span>
+
+<span class="nc" id="L389">					final RandomAccessibleInterval&lt; FloatType &gt; source =</span>
+<span class="nc" id="L390">							NonRigidTools.fuseVirtualInterpolatedNonRigid(</span>
+									dataLocal,
+									viewsToFuse,
+									viewsToUse,
+									labels,
+									fusionType,
+									displayDistances,
+									controlPointDistance,
+									alpha,
+									virtualGrid,
+									interpolation,
+									fusedBlock,
+									null,
+									service );
+
+<span class="nc" id="L405">					service.shutdown();</span>
+
+<span class="nc" id="L407">					final N5Writer executorVolumeWriter = N5Util.createN5Writer(n5PathURI, storageType);</span>
+
+<span class="nc bnc" id="L409" title="All 2 branches missed.">					if ( uint8 )</span>
+					{
+<span class="nc" id="L411">						final RandomAccessibleInterval&lt; UnsignedByteType &gt; sourceUINT8 =</span>
+<span class="nc" id="L412">								Converters.convert(</span>
+<span class="nc" id="L413">										source,(i, o) -&gt; o.setReal( ( i.get() - minIntensity ) / range ),</span>
+										new UnsignedByteType());
+
+						//final RandomAccessibleInterval&lt;UnsignedByteType&gt; sourceGridBlock = Views.offsetInterval(sourceUINT8, gridBlock[0], gridBlock[1]);
+<span class="nc" id="L417">						N5Utils.saveBlock(sourceUINT8, executorVolumeWriter, n5Dataset, gridBlock[2]);</span>
+<span class="nc" id="L418">					}</span>
+<span class="nc bnc" id="L419" title="All 2 branches missed.">					else if ( uint16 )</span>
+					{
+<span class="nc" id="L421">						final RandomAccessibleInterval&lt; UnsignedShortType &gt; sourceUINT16 =</span>
+<span class="nc" id="L422">								Converters.convert(</span>
+<span class="nc" id="L423">										source,(i, o) -&gt; o.setReal( ( i.get() - minIntensity ) / range ),</span>
+										new UnsignedShortType());
+
+						//final RandomAccessibleInterval&lt;UnsignedShortType&gt; sourceGridBlock = Views.offsetInterval(sourceUINT16, gridBlock[0], gridBlock[1]);
+<span class="nc" id="L427">						N5Utils.saveBlock(sourceUINT16, executorVolumeWriter, n5Dataset, gridBlock[2]);</span>
+<span class="nc" id="L428">					}</span>
+					else
+					{
+						//final RandomAccessibleInterval&lt;FloatType&gt; sourceGridBlock = Views.offsetInterval(source, gridBlock[0], gridBlock[1]);
+<span class="nc" id="L432">						N5Utils.saveBlock(source, executorVolumeWriter, n5Dataset, gridBlock[2]);</span>
+					}
+
+<span class="nc bnc" id="L435" title="All 2 branches missed.">					if ( executorVolumeWriter != N5Util.sharedHDF5Writer )</span>
+<span class="nc" id="L436">						executorVolumeWriter.close();</span>
+<span class="nc" id="L437">				});</span>
+
+<span class="nc" id="L439">		sc.close();</span>
+
+		// close main writer (is shared over Spark-threads if it's HDF5, thus just closing it here)
+<span class="nc" id="L442">		driverVolumeWriter.close();</span>
+
+<span class="nc" id="L444">		System.out.println( &quot;Saved non-rigid, e.g. view with './n5-view -i &quot; + n5PathURI + &quot; -d &quot; + n5Dataset );</span>
+<span class="nc" id="L445">		System.out.println( &quot;done, took: &quot; + (System.currentTimeMillis() - time ) + &quot; ms.&quot; );</span>
+
+<span class="nc" id="L447">		return null;</span>
+	}
+
+	public static void main(final String... args) {
+
+<span class="nc" id="L452">		System.out.println(Arrays.toString(args));</span>
+
+<span class="nc" id="L454">		System.exit(new CommandLine(new SparkNonRigidFusion()).execute(args));</span>
+<span class="nc" id="L455">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

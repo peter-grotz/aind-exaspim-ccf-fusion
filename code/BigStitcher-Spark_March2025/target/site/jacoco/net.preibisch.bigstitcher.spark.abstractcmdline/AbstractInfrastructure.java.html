@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AbstractInfrastructure.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark.abstractcmdline</a> &gt; <span class="el_source">AbstractInfrastructure.java</span></div><h1>AbstractInfrastructure.java</h1><pre class="source lang-java linenums">package net.preibisch.bigstitcher.spark.abstractcmdline;
+
+import java.io.Serializable;
+import java.util.concurrent.Callable;
+
+import picocli.CommandLine.Option;
+import util.URITools;
+
+<span class="nc" id="L9">public abstract class AbstractInfrastructure implements Callable&lt;Void&gt;, Serializable</span>
+{
+
+	private static final long serialVersionUID = 5199967181629299878L;
+
+<span class="nc" id="L14">	@Option(names = { &quot;--dryRun&quot; }, description = &quot;perform a 'dry run', i.e. do not save any results (default: false)&quot;)</span>
+	protected boolean dryRun = false;
+
+<span class="nc" id="L17">	@Option(names = &quot;--localSparkBindAddress&quot;, description = &quot;specify Spark bind address as localhost&quot;)</span>
+	protected boolean localSparkBindAddress = false;
+
+<span class="nc" id="L20">	@Option(names = { &quot;--s3Region&quot; }, description = &quot;Manually set AWS s3 region, e.g. us-west-2&quot;)</span>
+	protected String s3Region = null;
+
+	public void setRegion()
+	{
+<span class="nc bnc" id="L25" title="All 2 branches missed.">		if ( s3Region != null )</span>
+<span class="nc" id="L26">			URITools.s3Region = s3Region;</span>
+<span class="nc" id="L27">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

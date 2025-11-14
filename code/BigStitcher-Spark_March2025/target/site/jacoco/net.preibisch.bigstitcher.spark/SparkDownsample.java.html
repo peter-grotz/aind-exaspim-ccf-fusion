@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SparkDownsample.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark</a> &gt; <span class="el_source">SparkDownsample.java</span></div><h1>SparkDownsample.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark;
+
+import java.io.Serializable;
+import java.net.URI;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.Callable;
+
+import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.janelia.saalfeldlab.n5.Compression;
+import org.janelia.saalfeldlab.n5.DataType;
+import org.janelia.saalfeldlab.n5.N5Writer;
+import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
+import org.janelia.saalfeldlab.n5.universe.N5Factory.StorageFormat;
+
+import mpicbg.spim.data.SpimDataException;
+import net.imglib2.FinalInterval;
+import net.imglib2.RandomAccessibleInterval;
+import net.imglib2.type.NativeType;
+import net.imglib2.type.numeric.RealType;
+import net.imglib2.util.Util;
+import net.imglib2.view.Views;
+import net.preibisch.bigstitcher.spark.abstractcmdline.AbstractBasic;
+import net.preibisch.bigstitcher.spark.util.DataTypeUtil;
+import net.preibisch.bigstitcher.spark.util.Import;
+import net.preibisch.bigstitcher.spark.util.N5Util;
+import net.preibisch.mvrecon.process.downsampling.lazy.LazyHalfPixelDownsample2x;
+import picocli.CommandLine;
+import picocli.CommandLine.Option;
+import util.Grid;
+import util.URITools;
+
+<span class="nc" id="L56">public class SparkDownsample extends AbstractBasic implements Callable&lt;Void&gt;, Serializable</span>
+{
+	private static final long serialVersionUID = 5040141824053748124L;
+
+<span class="nc" id="L60">	@Option(names = { &quot;-i&quot;, &quot;--n5PathIn&quot; }, required = true, description = &quot;N5 path for saving, e.g. /home/fused.n5&quot;)</span>
+	private String n5PathIn = null;
+
+<span class="nc" id="L63">	@Option(names = { &quot;-di&quot;, &quot;--n5DatasetIn&quot; }, required = true, description = &quot;input N5 dataset, e.g. /ch488/s0&quot;)</span>
+	private String n5DatasetIn = null;
+
+<span class="nc" id="L66">	@Option(names = { &quot;-do&quot;, &quot;--n5DatasetsOut&quot; }, split = &quot;;&quot;, description = &quot;output N5 dataset(s), e.g. /ch488/s1;/ch488/s2;/ch488/s3;/ch488/s4&quot;)</span>
+	protected List&lt;String&gt; n5DatasetsOut = null;
+
+<span class="nc" id="L69">	@Option(names = &quot;--blockScale&quot;, description = &quot;how many blocks to use for a single processing step, e.g. 4,4,1 means for blockSize a 128,128,32 that each spark thread writes 512,512,32 (default: 1,1,1)&quot;)</span>
+	private String blockScaleString = &quot;1,1,1&quot;;
+
+<span class="nc" id="L72">	@Option(names = {&quot;-s&quot;, &quot;--storage&quot;}, defaultValue = &quot;N5&quot;, showDefaultValue = CommandLine.Help.Visibility.ALWAYS,</span>
+			description = &quot;Dataset storage type, currently supported N5, ZARR (and ONLY for local, multithreaded Spark: HDF5)&quot;)
+	private StorageFormat storageType = null;
+
+<span class="nc" id="L76">	@Option(names = { &quot;-ds&quot;, &quot;--downsampling&quot; }, split = &quot;;&quot;, required = true, description = &quot;consecutive downsample steps (e.g. 2,2,1; 2,2,1; 2,2,2; 2,2,2)&quot;)</span>
+	private List&lt;String&gt; downsampling = null;
+
+	@Override
+	public Void call() throws Exception
+	{
+<span class="nc" id="L82">		this.setRegion();</span>
+
+<span class="nc bnc" id="L84" title="All 2 branches missed.">		if (dryRun)</span>
+		{
+<span class="nc" id="L86">			System.out.println( &quot;dry-run not supported for downsampling.&quot;);</span>
+<span class="nc" id="L87">			System.exit( 0 );</span>
+		}
+
+<span class="nc bnc" id="L90" title="All 6 branches missed.">		if ( n5DatasetsOut == null || downsampling == null || n5DatasetsOut.size() != downsampling.size() )</span>
+		{
+<span class="nc" id="L92">			System.out.println( &quot;Please specify as many n5DatasetOut as you specify downsampling steps.&quot;);</span>
+<span class="nc" id="L93">			System.exit( 0 );</span>
+		}
+
+<span class="nc" id="L96">		final SparkConf conf = new SparkConf().setAppName(&quot;Downsample&quot;);</span>
+
+<span class="nc" id="L98">		final JavaSparkContext sc = new JavaSparkContext(conf);</span>
+<span class="nc" id="L99">		sc.setLogLevel(&quot;OFF&quot;);</span>
+
+<span class="nc" id="L101">		final int[][] downsampling = Import.csvStringListToDownsampling( this.downsampling );</span>
+
+<span class="nc" id="L103">		final URI n5Path = URITools.toURI( this.n5PathIn );</span>
+<span class="nc" id="L104">		final N5Writer n5 = N5Util.createN5Writer( n5Path, storageType );</span>
+
+<span class="nc" id="L106">		final Compression compression = n5.getAttribute( n5DatasetIn, &quot;compression&quot;, Compression.class );</span>
+<span class="nc" id="L107">		final int[] blockSize = n5.getAttribute( n5DatasetIn, &quot;blockSize&quot;, int[].class );</span>
+<span class="nc" id="L108">		final int[] blockScale = Import.csvStringToIntArray( blockScaleString );</span>
+<span class="nc" id="L109">		final DataType dataType = n5.getAttribute( n5DatasetIn, &quot;dataType&quot;, DataType.class );</span>
+<span class="nc" id="L110">		final String dataTypeString = dataType.toString();</span>
+
+<span class="nc" id="L112">		System.out.println( &quot;blockSize: &quot; + Util.printCoordinates( blockSize ) );</span>
+<span class="nc" id="L113">		System.out.println( &quot;dataType: &quot; + dataTypeString );</span>
+
+<span class="nc bnc" id="L115" title="All 2 branches missed.">		for ( int i = 0; i &lt; n5DatasetsOut.size(); ++i )</span>
+<span class="nc" id="L116">			System.out.println( &quot;'&quot; + n5DatasetsOut.get( i ) + &quot;' : &quot; + Util.printCoordinates( downsampling[ i ] ) );</span>
+
+<span class="nc" id="L118">		final long time = System.currentTimeMillis();</span>
+
+<span class="nc bnc" id="L120" title="All 2 branches missed.">		for ( int level = 0; level &lt; n5DatasetsOut.size(); ++level )</span>
+		{
+<span class="nc" id="L122">			final int[] ds = downsampling[ level ].clone();</span>
+
+<span class="nc" id="L124">			System.out.println( &quot;Peforming downsampling: &quot; + Util.printCoordinates( ds ) );</span>
+
+<span class="nc bnc" id="L126" title="All 2 branches missed.">			final String n5DatasetIn = (level == 0) ? this.n5DatasetIn : n5DatasetsOut.get( level - 1 );</span>
+<span class="nc" id="L127">			final String n5DatasetOut = n5DatasetsOut.get( level );</span>
+
+<span class="nc" id="L129">			final long[] inputDim = n5.getAttribute( n5DatasetIn, &quot;dimensions&quot;, long[].class );</span>
+<span class="nc" id="L130">			final long[] dim = new long[ inputDim.length ];</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">			for ( int d = 0; d &lt; dim.length; ++d )</span>
+<span class="nc" id="L132">				dim[ d ] = inputDim[ d ] / ds[ d ];</span>
+
+<span class="nc" id="L134">			n5.createDataset(</span>
+					n5DatasetOut,
+					dim, // dimensions
+					blockSize,
+					dataType,
+					compression );
+
+<span class="nc" id="L141">			final List&lt;long[][]&gt; grid = Grid.create(</span>
+					dim,
+					new int[] {
+							blockSize[0] * blockScale[ 0 ],
+							blockSize[1] * blockScale[ 1 ],
+							blockSize[2] * blockScale[ 2 ]
+					},
+					blockSize);
+
+<span class="nc" id="L150">			System.out.println( &quot;Input dimensions: &quot; + Util.printCoordinates( inputDim ));</span>
+<span class="nc" id="L151">			System.out.println( &quot;Output dimensions: &quot; + Util.printCoordinates( dim ));</span>
+<span class="nc" id="L152">			System.out.println( &quot;Tasks: &quot; + grid.size() );</span>
+
+<span class="nc" id="L154">			final JavaRDD&lt;long[][]&gt; rdd = sc.parallelize(grid);</span>
+
+
+<span class="nc" id="L157">			final long timeLevel = System.currentTimeMillis();</span>
+
+<span class="nc" id="L159">			rdd.foreach(</span>
+					gridBlock -&gt; {
+<span class="nc" id="L161">						final N5Writer n5Lcl = N5Util.createN5Writer( n5Path, storageType );</span>
+<span class="nc" id="L162">						final DataType dataTypeLcl = DataType.fromString(dataTypeString);</span>
+
+<span class="nc" id="L164">						RandomAccessibleInterval downsampled = N5Utils.open( n5Lcl, n5DatasetIn );</span>
+
+<span class="nc bnc" id="L166" title="All 2 branches missed.">						for ( int d = 0; d &lt; downsampled.numDimensions(); ++d )</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">							if ( ds[ d ] &gt; 1 )</span>
+<span class="nc" id="L168">								downsampled = LazyHalfPixelDownsample2x.init(</span>
+									downsampled,
+									new FinalInterval( downsampled ),
+<span class="nc" id="L171">									(RealType &amp; NativeType)DataTypeUtil.toType( dataTypeLcl ),</span>
+									blockSize,
+									d);
+
+<span class="nc" id="L175">						final RandomAccessibleInterval sourceGridBlock = Views.offsetInterval(downsampled, gridBlock[0], gridBlock[1]);</span>
+<span class="nc" id="L176">						N5Utils.saveNonEmptyBlock(sourceGridBlock, n5Lcl, n5DatasetOut, gridBlock[2], (RealType &amp; NativeType)DataTypeUtil.toType( dataTypeLcl ));</span>
+<span class="nc" id="L177">					});</span>
+
+<span class="nc" id="L179">			Thread.sleep( 100 );</span>
+<span class="nc" id="L180">			System.out.println( &quot;downsampled level=&quot; + level +&quot;, took: &quot; + (System.currentTimeMillis() - timeLevel ) + &quot; ms.&quot; );</span>
+		}
+
+<span class="nc" id="L183">		sc.close();</span>
+
+<span class="nc" id="L185">		n5.close();</span>
+
+<span class="nc" id="L187">		Thread.sleep( 100 );</span>
+<span class="nc" id="L188">		System.out.println( &quot;finished downsampling, in total took: &quot; + (System.currentTimeMillis() - time ) + &quot; ms.&quot; );</span>
+
+<span class="nc" id="L190">		return null;</span>
+	}
+
+	public static void main(final String... args) throws SpimDataException {
+
+<span class="nc" id="L195">		System.out.println(Arrays.toString(args));</span>
+
+<span class="nc" id="L197">		System.exit(new CommandLine(new SparkDownsample()).execute(args));</span>
+<span class="nc" id="L198">	}</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

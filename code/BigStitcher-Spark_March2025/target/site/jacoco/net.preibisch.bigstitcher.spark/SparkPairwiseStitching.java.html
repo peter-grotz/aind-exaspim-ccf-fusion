@@ -1,0 +1,356 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SparkPairwiseStitching.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">BigStitcher Spark</a> &gt; <a href="index.source.html" class="el_package">net.preibisch.bigstitcher.spark</a> &gt; <span class="el_source">SparkPairwiseStitching.java</span></div><h1>SparkPairwiseStitching.java</h1><pre class="source lang-java linenums">/*-
+ * #%L
+ * Spark-based parallel BigStitcher project.
+ * %%
+ * Copyright (C) 2021 - 2024 Developers.
+ * %%
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 2 of the
+ * License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public
+ * License along with this program.  If not, see
+ * &lt;http://www.gnu.org/licenses/gpl-2.0.html&gt;.
+ * #L%
+ */
+package net.preibisch.bigstitcher.spark;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
+
+import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+
+import mpicbg.spim.data.SpimDataException;
+import mpicbg.spim.data.generic.base.Entity;
+import mpicbg.spim.data.registration.ViewRegistrations;
+import mpicbg.spim.data.sequence.Angle;
+import mpicbg.spim.data.sequence.Channel;
+import mpicbg.spim.data.sequence.Illumination;
+import mpicbg.spim.data.sequence.Tile;
+import mpicbg.spim.data.sequence.TimePoint;
+import mpicbg.spim.data.sequence.ViewId;
+import net.imglib2.RealInterval;
+import net.imglib2.realtransform.AffineGet;
+import net.imglib2.realtransform.AffineTransform3D;
+import net.imglib2.util.Pair;
+import net.imglib2.util.Util;
+import net.imglib2.util.ValuePair;
+import net.preibisch.bigstitcher.spark.abstractcmdline.AbstractSelectableViews;
+import net.preibisch.bigstitcher.spark.util.Spark;
+import net.preibisch.bigstitcher.spark.util.Spark.SerializablePairwiseStitchingResult;
+import net.preibisch.mvrecon.fiji.spimdata.SpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.XmlIoSpimData2;
+import net.preibisch.mvrecon.fiji.spimdata.stitchingresults.PairwiseStitchingResult;
+import net.preibisch.mvrecon.process.interestpointregistration.pairwise.constellation.grouping.Group;
+import net.preibisch.stitcher.algorithm.FilteredStitchingResults;
+import net.preibisch.stitcher.algorithm.GroupedViewAggregator;
+import net.preibisch.stitcher.algorithm.GroupedViewAggregator.ActionType;
+import net.preibisch.stitcher.algorithm.PairwiseStitching;
+import net.preibisch.stitcher.algorithm.PairwiseStitchingParameters;
+import net.preibisch.stitcher.algorithm.SpimDataFilteringAndGrouping;
+import net.preibisch.stitcher.algorithm.TransformTools;
+import net.preibisch.stitcher.algorithm.globalopt.TransformationTools;
+import picocli.CommandLine;
+import picocli.CommandLine.Option;
+import scala.Tuple2;
+
+<span class="nc" id="L71">public class SparkPairwiseStitching extends AbstractSelectableViews</span>
+{
+	private static final long serialVersionUID = 2745578960909812636L;
+
+<span class="nc" id="L75">	@Option(names = { &quot;-ds&quot;, &quot;--downsampling&quot; }, required = false, description = &quot;Define the downsampling at which the stitching should be performed, e.g. -ds 4,4,1 (default: 2,2,1)&quot;)</span>
+	private String downsampling = &quot;2,2,1&quot;;
+
+<span class="nc" id="L78">	@Option(names = { &quot;-p&quot;, &quot;--peaksToCheck&quot; }, description = &quot;number of peaks in phase correlation image to check with cross-correlation (default: 5)&quot;)</span>
+	protected int peaksToCheck = 5;
+
+<span class="nc" id="L81">	@Option(names = { &quot;--disableSubpixelResolution&quot; }, description = &quot;do not use subpixel-accurate pairwise stitching&quot;)</span>
+	protected boolean disableSubpixelResolution = false;
+
+<span class="nc" id="L84">	@Option(names = { &quot;--minR&quot; }, description = &quot;minimum required cross correlation between two images (default: 0.3)&quot;)</span>
+	protected double minR = 0.3;
+
+<span class="nc" id="L87">	@Option(names = { &quot;--maxR&quot; }, description = &quot;maximum cross correlation between two images for a pair to be valid; a typical example is that correlations of 1.0 should be omitted (default: 1.0 / nothing omitted)&quot;)</span>
+	protected double maxR = 1.0;
+
+<span class="nc" id="L90">	@Option(names = { &quot;--maxShiftX&quot; }, description = &quot;maximum shift in X (in pixels) between two images that is allowed during pairwise comparison (default: any)&quot;)</span>
+	protected Double maxShiftX = null;
+
+<span class="nc" id="L93">	@Option(names = { &quot;--maxShiftY&quot; }, description = &quot;maximum shift in Y (in pixels) between two images that is allowed during pairwise comparison (default: any)&quot;)</span>
+	protected Double maxShiftY = null;
+
+<span class="nc" id="L96">	@Option(names = { &quot;--maxShiftZ&quot; }, description = &quot;maximum shift in Z (in pixels) between two images that is allowed during pairwise comparison (default: any)&quot;)</span>
+	protected Double maxShiftZ = null;
+
+<span class="nc" id="L99">	@Option(names = { &quot;--maxShiftTotal&quot; }, description = &quot;maximum shift (in pixels) between two images (total distance) that is allowed during pairwise comparison (default: any)&quot;)</span>
+	protected Double maxShiftTotal = null;
+
+<span class="nc" id="L102">	@Option(names = { &quot;--channelCombine&quot; }, description = &quot;defines how images of different channels of the same Tile are combined in the stitching process, AVERAGE or PICK_BRIGHTEST (default: AVERAGE)&quot;)</span>
+	protected ActionType channelCombine = ActionType.AVERAGE;
+
+<span class="nc" id="L105">	@Option(names = { &quot;--illumCombine&quot; }, description = &quot;defines how images of different illuminations of the same Tile are combined in the stitching process, AVERAGE or PICK_BRIGHTEST (default: PICK_BRIGHTEST)&quot;)</span>
+	protected ActionType illumCombine = ActionType.PICK_BRIGHTEST;
+
+	@Override
+	public Void call() throws Exception
+	{
+<span class="nc" id="L111">		this.setRegion();</span>
+
+<span class="nc" id="L113">		final SpimData2 dataGlobal = this.loadSpimData2();</span>
+
+<span class="nc bnc" id="L115" title="All 2 branches missed.">		if ( dataGlobal == null )</span>
+<span class="nc" id="L116">			return null;</span>
+
+<span class="nc" id="L118">		final ArrayList&lt; ViewId &gt; viewIdsGlobal = this.loadViewIds( dataGlobal );</span>
+
+<span class="nc bnc" id="L120" title="All 4 branches missed.">		if ( viewIdsGlobal == null || viewIdsGlobal.size() == 0 )</span>
+<span class="nc" id="L121">			return null;</span>
+
+<span class="nc" id="L123">		final long[] ds = Arrays.stream(downsampling.split(&quot;,&quot;)).map( st -&gt; st.trim() ).mapToLong(Long::parseLong).toArray();</span>
+
+<span class="nc" id="L125">		System.out.println( &quot;(&quot; + new Date( System.currentTimeMillis() ) + &quot;): Downsampling used for stitching: &quot; + Util.printCoordinates( ds ) );</span>
+
+		// get pairs to compare
+<span class="nc" id="L128">		System.out.println( &quot;(&quot; + new Date( System.currentTimeMillis() ) + &quot;): Finding pairs to compute overlap ... &quot; );</span>
+
+<span class="nc" id="L130">		final SpimDataFilteringAndGrouping&lt; SpimData2 &gt; grouping = new SpimDataFilteringAndGrouping&lt;&gt;( dataGlobal );</span>
+<span class="nc" id="L131">		grouping.addFilters( viewIdsGlobal.stream().map( vid -&gt; dataGlobal.getSequenceDescription().getViewDescription( vid ) ).collect( Collectors.toList() ) );</span>
+
+		// Defaults for grouping
+		// the default grouping by channels and illuminations
+<span class="nc" id="L135">		final HashSet&lt; Class &lt;? extends Entity&gt; &gt; defaultGroupingFactors = new HashSet&lt;&gt;();</span>
+<span class="nc" id="L136">		defaultGroupingFactors.add( Illumination.class );</span>
+<span class="nc" id="L137">		defaultGroupingFactors.add( Channel.class );</span>
+		// the default comparision by tiles
+<span class="nc" id="L139">		final HashSet&lt; Class &lt;? extends Entity&gt; &gt; defaultComparisonFactors = new HashSet&lt;&gt;();</span>
+<span class="nc" id="L140">		defaultComparisonFactors.add(Tile.class);</span>
+		// the default application along time points and angles
+<span class="nc" id="L142">		final HashSet&lt; Class &lt;? extends Entity&gt; &gt; defaultApplicationFactors = new HashSet&lt;&gt;();</span>
+<span class="nc" id="L143">		defaultApplicationFactors.add( TimePoint.class );</span>
+<span class="nc" id="L144">		defaultApplicationFactors.add( Angle.class );</span>
+
+<span class="nc" id="L146">		grouping.getAxesOfApplication().addAll( defaultApplicationFactors );</span>
+<span class="nc" id="L147">		grouping.getGroupingFactors().addAll( defaultGroupingFactors );</span>
+<span class="nc" id="L148">		grouping.getAxesOfComparison().addAll( defaultComparisonFactors );</span>
+
+<span class="nc" id="L150">		List&lt; ? extends Pair&lt; ? extends Group&lt; ? extends ViewId &gt;, ? extends Group&lt; ? extends ViewId &gt; &gt; &gt; groupedPairs =  grouping.getComparisons();</span>
+
+		// remove non-overlapping comparisons
+<span class="nc" id="L153">		final List&lt; Pair&lt; Group&lt; ViewId &gt;, Group&lt; ViewId &gt; &gt; &gt; removedPairs = TransformationTools.filterNonOverlappingPairs( (List)grouping.getComparisons(), dataGlobal.getViewRegistrations(), dataGlobal.getSequenceDescription() );</span>
+<span class="nc" id="L154">		System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Removed &quot; + removedPairs.size() + &quot; non-overlapping view-pairs for computing.&quot; );</span>
+
+<span class="nc" id="L156">		System.out.println( &quot;(&quot; + new Date( System.currentTimeMillis() ) + &quot;): For the following pairs pairwise stitching will be computed:&quot;);</span>
+<span class="nc" id="L157">		groupedPairs.forEach( pair -&gt; System.out.println( &quot;\t&quot; + pair.getA() + &quot; &lt;=&gt; &quot; + pair.getB() ) );</span>
+<span class="nc" id="L158">		System.out.println( &quot;(&quot; + new Date( System.currentTimeMillis() ) + &quot;): In total: &quot; + groupedPairs.size() + &quot; pair(s).&quot;);</span>
+
+		// setup parameters
+<span class="nc bnc" id="L161" title="All 2 branches missed.">		final boolean doSubpixel = !disableSubpixelResolution;</span>
+<span class="nc" id="L162">		final int numPeaks = this.peaksToCheck;</span>
+<span class="nc" id="L163">		final ActionType channelCombine = this.channelCombine;</span>
+<span class="nc" id="L164">		final ActionType illumCombine = this.illumCombine;</span>
+
+<span class="nc" id="L166">		final SparkConf conf = new SparkConf().setAppName(&quot;SparkPairwiseStitching&quot;);</span>
+<span class="nc" id="L167">		final JavaSparkContext sc = new JavaSparkContext(conf);</span>
+<span class="nc" id="L168">		sc.setLogLevel(&quot;ERROR&quot;);</span>
+
+<span class="nc" id="L170">		final JavaRDD&lt;int[][][]&gt; rdd = sc.parallelize( Spark.serializeGroupedViewIdPairsForRDD( groupedPairs ) ).repartition( Math.min( Spark.maxPartitions, groupedPairs.size() ) );</span>
+
+<span class="nc" id="L172">		final JavaRDD&lt;Tuple2&lt;int[][][], Spark.SerializablePairwiseStitchingResult&gt;&gt; rddResults = rdd.map( serializedGroupPair -&gt;</span>
+		{
+<span class="nc" id="L174">			final SpimData2 data = Spark.getSparkJobSpimData2( xmlURI );</span>
+<span class="nc" id="L175">			final Pair&lt;Group&lt;ViewId&gt;, Group&lt;ViewId&gt;&gt; pair = Spark.deserializeGroupedViewIdPairForRDD( serializedGroupPair );</span>
+<span class="nc" id="L176">			final ViewRegistrations vrs = data.getViewRegistrations();</span>
+
+<span class="nc" id="L178">			final PairwiseStitchingParameters params = new PairwiseStitchingParameters();</span>
+<span class="nc" id="L179">			params.doSubpixel = doSubpixel;</span>
+<span class="nc" id="L180">			params.peaksToCheck = numPeaks;</span>
+
+<span class="nc" id="L182">			final GroupedViewAggregator gva = new GroupedViewAggregator();</span>
+			//gva.addAction( ActionType.PICK_SPECIFIC, Illumination.class, new Illumination( 0 ) );
+			//gva.addAction( ActionType.PICK_SPECIFIC, Illumination.class, new Illumination( 1 ) );
+<span class="nc" id="L185">			gva.addAction( illumCombine, Illumination.class, null );</span>
+<span class="nc" id="L186">			gva.addAction( channelCombine, Channel.class, null );</span>
+
+<span class="nc" id="L188">			final ExecutorService serviceLocal = Executors.newFixedThreadPool( 1 );</span>
+
+			// TODO: do non-equal transformation registration when views within a group have differing transformations
+<span class="nc" id="L191">			final ViewId firstVdA = pair.getA().iterator().next();</span>
+<span class="nc" id="L192">			final ViewId firstVdB = pair.getB().iterator().next();</span>
+
+<span class="nc" id="L194">			boolean nonTranslationsEqual = TransformTools.nonTranslationsEqual( vrs.getViewRegistration( firstVdA ), vrs.getViewRegistration( firstVdB ) );</span>
+
+			final Pair&lt;Pair&lt; AffineGet, Double &gt;, RealInterval&gt; result;
+
+<span class="nc bnc" id="L198" title="All 2 branches missed.">			if (nonTranslationsEqual)</span>
+			{
+<span class="nc bnc" id="L200" title="All 2 branches missed.">				if ( PairwiseStitching.debug )</span>
+<span class="nc" id="L201">					System.out.println( &quot;non translations equal&quot; );</span>
+<span class="nc" id="L202">				result = TransformationTools.computeStitching(</span>
+<span class="nc" id="L203">						pair.getA(),</span>
+<span class="nc" id="L204">						pair.getB(),</span>
+						vrs,
+						params,
+<span class="nc" id="L207">						data.getSequenceDescription(),</span>
+						gva,
+						ds,
+						serviceLocal );
+			}
+			else
+			{
+<span class="nc" id="L214">				result = TransformationTools.computeStitchingNonEqualTransformations( </span>
+<span class="nc" id="L215">						pair.getA(),</span>
+<span class="nc" id="L216">						pair.getB(),</span>
+						vrs,
+						params,
+<span class="nc" id="L219">						data.getSequenceDescription(),</span>
+						gva,
+						ds,
+						serviceLocal );
+<span class="nc bnc" id="L223" title="All 2 branches missed.">				if ( PairwiseStitching.debug )</span>
+<span class="nc" id="L224">					System.out.println( &quot;non translations NOT equal, using virtually fused views for stitching&quot; );</span>
+			}
+
+<span class="nc" id="L227">			serviceLocal.shutdown();</span>
+
+<span class="nc bnc" id="L229" title="All 2 branches missed.">			if ( result == null )</span>
+			{
+<span class="nc" id="L231">				System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Compute pairwise: &quot; + pair.getA() + &quot; &lt;&gt; &quot; + pair.getB() + &quot;: No shift found.&quot; );</span>
+
+<span class="nc" id="L233">				return new Tuple2&lt;&gt;(serializedGroupPair, null);</span>
+			}
+			else
+			{
+<span class="nc" id="L237">				System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Compute pairwise: &quot; + pair.getA() + &quot; &lt;&gt; &quot; + pair.getB() + &quot;: r=&quot; + result.getA().getB() );</span>
+
+<span class="nc" id="L239">				AffineTransform3D resT = new AffineTransform3D();</span>
+<span class="nc" id="L240">				resT.preConcatenate( result.getA().getA() );</span>
+
+<span class="nc" id="L242">				final double oldTransformHash = PairwiseStitchingResult.calculateHash(</span>
+<span class="nc" id="L243">						vrs.getViewRegistration( pair.getA().getViews().iterator().next() ),</span>
+<span class="nc" id="L244">						vrs.getViewRegistration( pair.getB().getViews().iterator().next() ) );</span>
+
+<span class="nc" id="L246">				final PairwiseStitchingResult&lt;ViewId&gt; pairwiseStitchingResult =</span>
+						new PairwiseStitchingResult&lt;&gt;(
+								new ValuePair&lt;&gt;(
+<span class="nc" id="L249">										pair.getA(),</span>
+<span class="nc" id="L250">										pair.getB()),</span>
+<span class="nc" id="L251">								result.getB(),</span>
+								resT,
+<span class="nc" id="L253">								result.getA().getB(),</span>
+								oldTransformHash );
+
+<span class="nc" id="L256">				return new Tuple2&lt;&gt;( serializedGroupPair, new Spark.SerializablePairwiseStitchingResult( pairwiseStitchingResult ) );</span>
+			}
+		});
+
+<span class="nc" id="L260">		rddResults.cache();</span>
+<span class="nc" id="L261">		rddResults.count();</span>
+
+<span class="nc" id="L263">		final ArrayList&lt; PairwiseStitchingResult&lt; ViewId &gt; &gt; results = new ArrayList&lt;&gt;();</span>
+
+<span class="nc" id="L265">		System.out.println( &quot;\nCollecting results\n&quot; );</span>
+
+<span class="nc bnc" id="L267" title="All 2 branches missed.">		for ( final Tuple2&lt;int[][][], SerializablePairwiseStitchingResult&gt; result : rddResults.collect() )</span>
+		{
+<span class="nc" id="L269">			final Pair&lt;Group&lt;ViewId&gt;, Group&lt;ViewId&gt;&gt; pair = Spark.deserializeGroupedViewIdPairForRDD( result._1() );</span>
+
+<span class="nc bnc" id="L271" title="All 2 branches missed.">			if (result._2() != null )</span>
+			{
+<span class="nc" id="L273">				final PairwiseStitchingResult&lt; ViewId &gt; r = result._2().deserialize();</span>
+<span class="nc" id="L274">				results.add( r );</span>
+<span class="nc" id="L275">				System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Compute pairwise: &quot; + pair.getA() + &quot; &lt;&gt; &quot; + pair.getB() + &quot;: r=&quot; + r.r() );</span>
+<span class="nc" id="L276">			}</span>
+			else
+			{
+<span class="nc" id="L279">				System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Compute pairwise: &quot; + pair.getA() + &quot; &lt;&gt; &quot; + pair.getB() + &quot;: No shift found, skipping pair.&quot; );</span>
+			}
+
+			// try to remove a -&gt; b and b -&gt; a, just to make sure
+<span class="nc" id="L283">			dataGlobal.getStitchingResults().getPairwiseResults().remove( pair );</span>
+<span class="nc" id="L284">			dataGlobal.getStitchingResults().getPairwiseResults().remove( new ValuePair&lt;&gt;( pair.getB(), pair.getA() ) );</span>
+<span class="nc" id="L285">		}</span>
+
+<span class="nc" id="L287">		System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Remaining pairs: &quot; + results.size() );</span>
+
+
+		// update StitchingResults with Results
+<span class="nc bnc" id="L291" title="All 2 branches missed.">		for ( final PairwiseStitchingResult&lt; ViewId &gt; psr : results )</span>
+		{
+<span class="nc bnc" id="L293" title="All 2 branches missed.">			if (psr == null)</span>
+<span class="nc" id="L294">				continue;</span>
+
+<span class="nc" id="L296">			dataGlobal.getStitchingResults().setPairwiseResultForPair(psr.pair(), psr );</span>
+<span class="nc" id="L297">		}</span>
+
+		//
+		// now filter the results
+		//
+<span class="nc" id="L302">		final boolean doCorrelationFilter = true;</span>
+<span class="nc" id="L303">		final double minR = this.minR;</span>
+<span class="nc" id="L304">		final double maxR = this.maxR;</span>
+
+<span class="nc bnc" id="L306" title="All 6 branches missed.">		final boolean doAbsoluteShiftFilter = maxShiftX != null || maxShiftY != null || maxShiftZ != null;</span>
+<span class="nc bnc" id="L307" title="All 2 branches missed.">		final double[] maxShift = new double[] { </span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">				maxShiftX == null ? Double.MAX_VALUE : maxShiftX,</span>
+<span class="nc bnc" id="L309" title="All 2 branches missed.">				maxShiftY == null ? Double.MAX_VALUE : maxShiftY,</span>
+<span class="nc" id="L310">				maxShiftZ == null ? Double.MAX_VALUE : maxShiftZ };</span>
+
+<span class="nc bnc" id="L312" title="All 2 branches missed.">		final boolean doMagnitudeFilter = maxShiftTotal != null;</span>
+<span class="nc bnc" id="L313" title="All 2 branches missed.">		final double maxMag = maxShiftTotal == null ? Double.MAX_VALUE : maxShiftTotal;</span>
+
+<span class="nc" id="L315">		System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Applying filter minR=&quot; + minR );</span>
+<span class="nc" id="L316">		System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Applying filter maxR=&quot; + maxR );</span>
+
+<span class="nc bnc" id="L318" title="All 2 branches missed.">		if ( doAbsoluteShiftFilter )</span>
+<span class="nc" id="L319">			System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Applying filter shift in X/Y/Z=&quot; + Util.printCoordinates( maxShift ) );</span>
+
+<span class="nc bnc" id="L321" title="All 2 branches missed.">		if ( doMagnitudeFilter )</span>
+<span class="nc" id="L322">			System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Applying filter total max shift=&quot; + maxMag );</span>
+
+<span class="nc" id="L324">		final FilteredStitchingResults fsr = new FilteredStitchingResults( dataGlobal.getStitchingResults(), null );</span>
+
+		if (doCorrelationFilter)
+<span class="nc" id="L327">			fsr.addFilter(new FilteredStitchingResults.CorrelationFilter(minR, maxR));</span>
+
+<span class="nc bnc" id="L329" title="All 2 branches missed.">		if (doAbsoluteShiftFilter)</span>
+<span class="nc" id="L330">			fsr.addFilter(new FilteredStitchingResults.AbsoluteShiftFilter(maxShift));</span>
+
+<span class="nc bnc" id="L332" title="All 2 branches missed.">		if (doMagnitudeFilter)</span>
+<span class="nc" id="L333">			fsr.addFilter(new FilteredStitchingResults.ShiftMagnitudeFilter(maxMag));</span>
+
+<span class="nc" id="L335">		fsr.applyToWrappedAll();</span>
+
+<span class="nc" id="L337">		System.out.println( new Date( System.currentTimeMillis() ) + &quot;: Remaining pairs after applying filters: &quot; + fsr.getPairwiseResults().size() );</span>
+
+<span class="nc" id="L339">		sc.close();</span>
+
+<span class="nc bnc" id="L341" title="All 2 branches missed.">		if (!dryRun)</span>
+		{
+<span class="nc" id="L343">			System.out.println( &quot;Saving resulting XML ... &quot;);</span>
+<span class="nc" id="L344">			new XmlIoSpimData2().save( dataGlobal, xmlURI );</span>
+		}
+
+<span class="nc" id="L347">		return null;</span>
+	}
+
+	public static void main(final String... args) throws SpimDataException
+	{
+<span class="nc" id="L352">		System.out.println(Arrays.toString(args));</span>
+<span class="nc" id="L353">		System.exit(new CommandLine(new SparkPairwiseStitching()).execute(args));</span>
+<span class="nc" id="L354">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>
