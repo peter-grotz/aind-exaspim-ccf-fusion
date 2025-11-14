@@ -42,6 +42,7 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
 
  # 1) Create application
  create_app=$(aws emr-serverless create-application \
+   --region us-west-2 \
    --type SPARK \
    --name $job_name \
    --release-label "emr-6.15.0" \
