@@ -92,6 +92,7 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
  
  # entryPointArguments must be formatted as a long list-- string parsing is not robust
  run_job=$(aws emr-serverless start-job-run \
+     --region us-west-2 \
      --application-id $APPLICATION_ID \
      --execution-role-arn $JOB_ROLE_ARN \
      --name $job_name \
