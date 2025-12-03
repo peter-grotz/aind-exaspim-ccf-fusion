@@ -2,9 +2,7 @@
 #!/usr/bin/env bash
 set -ex
 
-python update_smartsheet.py
 
-stop 
  # Extract bigstitcher xml path
 json_path="../data/exaspim_manifest1.json"
 path=$(jq -r '."zarr_multiscale"."input_uri"' "$json_path")
@@ -131,9 +129,12 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
      job_state=$(echo $get_job_state | /usr/bin/jq --raw-output '.jobRun.state')
      echo $job_state
  done
+
  echo "Job complete"
  
- 
+python update_smartsheet.py
+echo "SmartSheet Updated -- CCF Fusion Complete"
+
  # (3) Clean up: stop and delete application 
  #aws emr-serverless stop-application \
  #    --application-id $APPLICATION_ID
