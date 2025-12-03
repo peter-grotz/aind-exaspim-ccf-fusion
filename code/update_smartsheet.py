@@ -8,6 +8,8 @@ Code for updating SmartSheet after CCF fusion has completed.
 
 """
 
+from aind_exaspim_dataset_utils.smartsheet_util import SmartSheetClient
+
 
 def main():
     # Update SmartSheet
@@ -28,6 +30,11 @@ def find_brain_id():
         raise ValueError(f"Could not extract exaSPIM ID from {uri}")
     brain_id = result.group(1)
     return brain_id
+
+
+def read_json(path):
+    with open(path, "r") as file:
+        return json.load(file)
 
 
 def find_manifest_json_path():
