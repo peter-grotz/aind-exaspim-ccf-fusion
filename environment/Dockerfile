@@ -40,5 +40,6 @@ RUN cd /.code-server \
 
 RUN pip install -U --no-cache-dir \
     awscli==1.33.30 \
-    xmltodict==0.13.0
+    xmltodict==0.13.0 \
+    aind-exaspim-dataset-utils@git+https://github.com/AllenNeuralDynamics/aind-exaspim-dataset-utils.git@main \
 
