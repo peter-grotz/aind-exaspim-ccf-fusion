@@ -2,9 +2,7 @@
 #!/usr/bin/env bash
 set -ex
 
-python update_smartsheet.py
-
-stop 
+ 
  # Extract bigstitcher xml path
 json_path="../data/exaspim_manifest1.json"
 path=$(jq -r '."zarr_multiscale"."input_uri"' "$json_path")
