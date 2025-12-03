@@ -10,6 +10,10 @@ Code for updating SmartSheet after CCF fusion has completed.
 
 from aind_exaspim_dataset_utils.smartsheet_util import SmartSheetClient
 
+import json
+import os
+import re
+
 
 def main():
     # Update SmartSheet
