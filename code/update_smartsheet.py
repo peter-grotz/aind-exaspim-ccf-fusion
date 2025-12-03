@@ -21,7 +21,7 @@ def main():
 def find_brain_id():
     # Load JSON and extract brain_id
     manifest_json_path = find_manifest_json_path()
-    manifest = util.read_json(manifest_json_path)
+    manifest = read_json(manifest_json_path)
     uri = manifest['zarr_multiscale']['input_uri']
 
     # Extract brain ID
