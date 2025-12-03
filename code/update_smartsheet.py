@@ -9,6 +9,7 @@ Code for updating SmartSheet after CCF fusion has completed.
 """
 
 from aind_exaspim_dataset_utils.smartsheet_util import SmartSheetClient
+from datetime import datetime
 
 import json
 import os
