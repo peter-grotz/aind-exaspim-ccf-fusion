@@ -14,6 +14,8 @@ s3_xml_path="${base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.
 
  job_name=$(echo "$s3_xml_path" | awk -F'/' '{print $4}')
 
+ fusion_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
  echo "$job_name"
 
 
@@ -189,6 +191,9 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
  done
 
  echo "CCF fusion: $job_state ; Mask fusion: $mask_job_state"
+
+ # Bare-minimum metadata: emit a process record (upload capsule -> validated v2).
+ python emit_fusion_record.py "$fusion_start" || echo "metadata emit failed (non-fatal)"
 
 python update_smartsheet.py
 echo "SmartSheet Updated -- CCF Fusion + Mask Complete"
