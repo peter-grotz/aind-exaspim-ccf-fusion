@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Bare-minimum metadata for the CCF fusion capsule.
 
-Emits a lightweight process_record.json (schema-agnostic) describing the CCF
-channel fusion (and the mask fusion done with the same transforms). The upload
-capsule converts records -> validated v2 Processing. Because fusion writes to
-S3 (not through the nextflow channel to upload), the record is also copied to
-the asset's S3 fusion/ folder so the upload builder can pick it up.
+Emits a v2 DataProcess document (*_data_process.json) describing the CCF channel
+fusion (and the mask fusion done with the same transforms). aind-metadata-manager
+(in the upload capsule) collects + validates it. Because fusion writes to S3 (not
+through the nextflow channel to upload), the file is also copied to the asset's
+S3 fusion/ folder; the upload capsule fetches *_data_process.json from there.
 
 Usage: python emit_fusion_record.py [START_ISO]
 """
@@ -15,7 +15,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-from aind_process_record import make_record, write_records
+from aind_process_record import make_data_process, write_data_process
 
 
 def _now():
@@ -37,7 +37,7 @@ def main() -> None:
             pass
     base = input_uri.split("/fusion/")[0] if "/fusion/" in input_uri else ""
 
-    record = make_record(
+    data_process = make_data_process(
         process_type="Image tile fusing",
         name="CCF channel fusion",
         start=start,
@@ -62,14 +62,15 @@ def main() -> None:
                "intermediate)."),
     )
 
-    local = write_records([record], "/results/fusion")
+    local = write_data_process(data_process, "/results/fusion")
     print(f"wrote {local}")
 
-    # bridge to the upload capsule: copy the record into the asset's S3 fusion/ folder
+    # bridge to the upload capsule: copy the data_process file into the asset's
+    # S3 fusion/ folder; the upload capsule fetches *_data_process.json from there.
     if base:
-        dest = f"{base}/fusion/process_record.json"
+        dest = f"{base}/fusion/{os.path.basename(local)}"
         subprocess.run(["aws", "s3", "cp", local, dest], check=False)
-        print(f"copied record to {dest}")
+        print(f"copied data_process to {dest}")
 
 
 if __name__ == "__main__":
