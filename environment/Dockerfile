@@ -13,9 +13,9 @@ ARG AWS_ACCESS_KEY_ID
 ARG AWS_DEFAULT_REGION
 ARG AWS_SECRET_ACCESS_KEY
 
-ARG GIT_ASKPASS
-ARG GIT_ACCESS_TOKEN
-COPY git-askpass /
+# (Removed COPY git-askpass / + GIT_* ARGs: the only git pip-install below is the
+#  public aind-exaspim-dataset-utils repo, so no build-time git auth is needed.
+#  git-askpass was a CO-only build artifact, absent from this GitHub-sourced capsule.)
 
 ENV JAVA_HOME=/code/zulu8.80.0.17-ca-fx-jdk8.0.422-linux_x64/jre
 ENV PATH=/code/zulu8.80.0.17-ca-fx-jdk8.0.422-linux_x64:$PATH
