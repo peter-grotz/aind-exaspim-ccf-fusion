@@ -2,6 +2,12 @@
 ARG REGISTRY_HOST
 FROM $REGISTRY_HOST/codeocean/ubuntu-desktop-igv-fiji-mambaforge:23.1.0-4-python3.10.12-fiji20231107-1617-firefox120.0-igv2.16.1-guacamole1.5.2-ubuntu22.04
 
+# === TEMPORARY (TEST) — REMOVE BEFORE PRODUCTION ===
+# Write fused outputs (fused_ccf_ch.zarr, fused_mask_ch.zarr, mask XML,
+# data_process) to the scratch test dir; inputs still read from aind-open-data.
+# Delete this line to restore production.
+ENV OUTPUT_PREFIX=s3://aind-scratch-data/exaspim_processing_test
+
 ARG DEBIAN_FRONTEND=noninteractive
 ARG AWS_ACCESS_KEY_ID
 ARG AWS_DEFAULT_REGION
