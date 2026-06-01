@@ -6,11 +6,16 @@ set -ex
  # Extract bigstitcher xml path
 json_path="../data/exaspim_manifest1.json"
 path=$(jq -r '."zarr_multiscale"."input_uri"' "$json_path")
-base="${path%%/fusion/*}"
-s3_xml_path="${base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.xml"
+in_base="${path%%/fusion/*}"   # read inputs from here (e.g. the aind-open-data asset)
+asset_name="${in_base##*/}"
+# Outputs go to ${OUTPUT_PREFIX}/<asset_name> when OUTPUT_PREFIX is set (e.g. a
+# scratch test dir like s3://aind-scratch-data/exaspim_processing_test);
+# otherwise they go alongside the input asset (production).
+if [ -n "$OUTPUT_PREFIX" ]; then out_base="${OUTPUT_PREFIX%/}/${asset_name}"; else out_base="${in_base}"; fi
+s3_xml_path="${in_base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.xml"
 
 # Set output zarr location
- zarr_location="${base}/fusion/fused_ccf_ch.zarr"
+ zarr_location="${out_base}/fusion/fused_ccf_ch.zarr"
 
  job_name=$(echo "$s3_xml_path" | awk -F'/' '{print $4}')
 
@@ -42,8 +47,11 @@ s3_xml_path="${base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.
  # registration capsule, matched to the CCF/template mask); NOT a published channel.
  #--------------------------------#
  mask_xml_local=/results/bigstitcher_split_affine_mask.xml
- mask_xml_s3="${base}/fusion/bigstitcher_split_affine_mask.xml"
- mask_zarr_location="${base}/fusion/fused_mask_ch.zarr"
+ mask_xml_s3="${out_base}/fusion/bigstitcher_split_affine_mask.xml"
+ mask_zarr_location="${out_base}/fusion/fused_mask_ch.zarr"
+ # Download the CCF-channel XML from the INPUT asset; the in-XML data paths keep
+ # pointing at aind-open-data (mask tiles are read from there), only the output
+ # zarr targets are redirected.
  aws s3 cp "${s3_xml_path}" "${mask_xml_local}"
  sed -i 's#/flatfield_correction/SPIM.ome.zarr/#/flatfield_correction/mask/SPIM.ome.zarr/#g' "${mask_xml_local}"
  aws s3 cp "${mask_xml_local}" "${mask_xml_s3}"

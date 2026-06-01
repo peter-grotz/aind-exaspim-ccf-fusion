@@ -35,7 +35,12 @@ def main() -> None:
             input_uri = str(json.load(open(manifest)).get("zarr_multiscale", {}).get("input_uri", ""))
         except Exception:
             pass
-    base = input_uri.split("/fusion/")[0] if "/fusion/" in input_uri else ""
+    in_base = input_uri.split("/fusion/")[0] if "/fusion/" in input_uri else ""
+    # outputs go to OUTPUT_PREFIX/<asset_name> when set (scratch test dir), else
+    # alongside the input asset.
+    prefix = os.environ.get("OUTPUT_PREFIX")
+    base = (f"{prefix.rstrip('/')}/{in_base.rstrip('/').split('/')[-1]}"
+            if (prefix and in_base) else in_base)
 
     data_process = make_data_process(
         process_type="Image tile fusing",
