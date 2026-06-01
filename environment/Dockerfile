@@ -24,9 +24,9 @@ ENV JAVA_OPTS=$JAVA_OPTS -Djava.awt.headless=true
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        libblosc-dev=1.21.1+ds2-2 \
-        maven=3.6.3-5 \
-        jq=1.6-2.1ubuntu3.1 \
+        libblosc-dev \
+        maven \
+        jq \
     && rm -rf /var/lib/apt/lists/*
 
 
