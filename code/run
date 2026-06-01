@@ -6,17 +6,24 @@ set -ex
  # Extract bigstitcher xml path
 json_path="../data/exaspim_manifest1.json"
 path=$(jq -r '."zarr_multiscale"."input_uri"' "$json_path")
-base="${path%%/fusion/*}"
-s3_xml_path="${base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.xml"
+in_base="${path%%/fusion/*}"   # read inputs from here (e.g. the aind-open-data asset)
+asset_name="${in_base##*/}"
+# Outputs go to ${OUTPUT_PREFIX}/<asset_name> when OUTPUT_PREFIX is set (e.g. a
+# scratch test dir like s3://aind-scratch-data/exaspim_processing_test);
+# otherwise they go alongside the input asset (production).
+if [ -n "$OUTPUT_PREFIX" ]; then out_base="${OUTPUT_PREFIX%/}/${asset_name}"; else out_base="${in_base}"; fi
+s3_xml_path="${in_base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.xml"
 
 # Set output zarr location
- zarr_location="${base}/fusion/fused_ccf_ch.zarr"
+ zarr_location="${out_base}/fusion/fused_ccf_ch.zarr"
 
  job_name=$(echo "$s3_xml_path" | awk -F'/' '{print $4}')
- 
+
+ fusion_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
  echo "$job_name"
- 
- 
+
+
  #--------------------------------#
  log_file=/results/emr_affine_fusion.txt
  echo "processed_data_asset=${processed_data_asset}" >> $log_file
@@ -25,15 +32,50 @@ s3_xml_path="${base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.
  echo "out_s3_bucket=${out_s3_bucket}" >> $log_file
  echo "zarr_location=${zarr_location}" >> $log_file
  echo "xml_out=${xml_out}" >> $log_file
- 
- 
+
+
+ #--------------------------------#
+ # GOAL 3: derive a mask BigStitcher XML from the CCF-channel split XML by
+ # repointing ONLY the image-loader base path from
+ #   .../flatfield_correction/SPIM.ome.zarr/      (CCF channel tiles)
+ # to
+ #   .../flatfield_correction/mask/SPIM.ome.zarr/ (mask tiles, same names).
+ # Every <ViewRegistration> transform is preserved, so the mask is fused with
+ # the EXACT same transforms as the CCF channel, into the same space. The mask
+ # fusion is submitted CONCURRENTLY with the CCF fusion (below).
+ # fused_mask_ch.zarr is a registration-only intermediate (-> nii.gz in the
+ # registration capsule, matched to the CCF/template mask); NOT a published channel.
+ #--------------------------------#
+ mask_xml_local=/results/bigstitcher_split_affine_mask.xml
+ mask_xml_s3="${out_base}/fusion/bigstitcher_split_affine_mask.xml"
+ mask_zarr_location="${out_base}/fusion/fused_mask_ch.zarr"
+ # Download the CCF-channel XML from the INPUT asset; the in-XML data paths keep
+ # pointing at aind-open-data (mask tiles are read from there), only the output
+ # zarr targets are redirected.
+ aws s3 cp "${s3_xml_path}" "${mask_xml_local}"
+ sed -i 's#/flatfield_correction/SPIM.ome.zarr/#/flatfield_correction/mask/SPIM.ome.zarr/#g' "${mask_xml_local}"
+ aws s3 cp "${mask_xml_local}" "${mask_xml_s3}"
+ echo "mask_xml_s3=${mask_xml_s3}" >> $log_file
+ echo "mask_zarr_location=${mask_zarr_location}" >> $log_file
+
+
  #--------------------------------#
  #--------------------------------#
  #--------------------------------#
 
+ # Build fusion containers for BOTH the CCF channel and the mask up front.
 sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
   -x "${s3_xml_path}" \
   -o "${zarr_location}" \
+  -d UINT16 \
+  --multiRes \
+  --blockSize 256,256,256 \
+  -s ZARR \
+  --anisotropyFactor 1
+
+sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
+  -x "${mask_xml_s3}" \
+  -o "${mask_zarr_location}" \
   -d UINT16 \
   --multiRes \
   --blockSize 256,256,256 \
@@ -69,12 +111,12 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
      "memory": "7500GB",
      "disk": "100000GB"
    }')
- 
+
  APPLICATION_ID=$(echo $create_app | /usr/bin/jq --raw-output '.applicationId')
  echo "My application's ID: $APPLICATION_ID"
- # 
- # Poll startup state. 
- # Once application is created, start it. 
+ #
+ # Poll startup state.
+ # Once application is created, start it.
  until [ "$app_state" = "CREATED" ];
  do
      get_state=$(aws emr-serverless get-application \
@@ -87,12 +129,12 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
      --region us-west-2 \
      --application-id $APPLICATION_ID
  echo "Job Started"
- 
- 
+
+
  # 2) Run the fusion, just need to input s3_xml_path and n5_location
  JOB_ROLE_ARN="arn:aws:iam::467914378000:role/aind-emr-role"
  # JOB_ROLE_ARN="arn:aws:iam::467914378000:role/aind-codeocean-power-user"
- 
+
  # entryPointArguments must be formatted as a long list-- string parsing is not robust
  run_job=$(aws emr-serverless start-job-run \
      --region us-west-2 \
@@ -115,28 +157,56 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
      }' \
      --execution-timeout-minutes 14400
      )
- 
+
  JOB_RUN_ID=$(echo $run_job | /usr/bin/jq --raw-output '.jobRunId')
- 
- 
- until [ "$job_state" = "SUCCESS" ] || [ "$job_state" = "FAILED" ];
+
+ # Submit the MASK fusion CONCURRENTLY (same EMR application, same transforms
+ # via the mask container created above). Output -> fused_mask_ch.zarr.
+ mask_job=$(aws emr-serverless start-job-run \
+     --region us-west-2 \
+     --application-id $APPLICATION_ID \
+     --execution-role-arn $JOB_ROLE_ARN \
+     --name "${job_name}_mask" \
+     --job-driver '{
+         "sparkSubmit": {
+             "entryPoint": "s3://aind-scratch-data/sharmi.seshamani/BigStitcher-Spark-0.1.0-SNAPSHOT_09-04-25.jar",
+             "entryPointArguments": ["--blockScale","4,4,4",  "-o", "'"${mask_zarr_location}"'", "-s", "ZARR"],
+             "sparkSubmitParameters": "--class net.preibisch.bigstitcher.spark.SparkAffineFusion --conf spark.default.parallelism=120 --conf spark.driver.cores=1 --conf spark.driver.memory=6g --conf spark.executor.cores=16 --conf spark.executor.memory=53g --conf spark.emr-serverless.memoryOverheadFactor=0.12  --conf spark.executorEnv.REGION=us-west-2 --conf spark.emr-serverless.driverEnv.REGION=us-west-2 --conf spark.task.maxFailures=100 --conf spark.speculation=false  --conf spark.speculation.multiplier=1.5  --conf spark.speculation.quantile=0.75 --conf spark.hadoop.fs.s3a.multipart.size=134217728 --conf spark.excludeOnFailure.task.maxTaskAttemptsPerNode=1 --conf spark.dynamicAllocation.initialExecutors=2 --conf spark.hadoop.fs.s3a.connection.maximum=500 --conf spark.hadoop.fs.s3a.threads.max=512 --conf spark.hadoop.fs.s3a.retry.limit=20 --conf spark.hadoop.fs.s3a.retry.interval=500ms --conf spark.hadoop.fs.s3a.fast.upload=true --conf spark.hadoop.hive.metastore.client.factory.class=com.amazonaws.glue.catalog.metastore.AWSGlueDataCatalogHiveClientFactory"
+         }
+     }' \
+     --configuration-overrides '{
+         "monitoringConfiguration": {
+             "s3MonitoringConfiguration": {
+                 "logUri": "s3://aind-scratch-data/jonathan.wong/dask-emr/logs/"
+             }
+         }
+     }' \
+     --execution-timeout-minutes 14400
+     )
+
+ MASK_JOB_RUN_ID=$(echo $mask_job | /usr/bin/jq --raw-output '.jobRunId')
+
+ # Poll BOTH jobs until each reaches a terminal state.
+ job_state=""
+ mask_job_state=""
+ until { [ "$job_state" = "SUCCESS" ] || [ "$job_state" = "FAILED" ]; } \
+    && { [ "$mask_job_state" = "SUCCESS" ] || [ "$mask_job_state" = "FAILED" ]; };
  do
      sleep 10
-     # monitor job progress
-     get_job_state=$(aws emr-serverless get-job-run \
-         --region us-west-2 \
-         --application-id $APPLICATION_ID \
-         --job-run-id $JOB_RUN_ID)
-     job_state=$(echo $get_job_state | /usr/bin/jq --raw-output '.jobRun.state')
-     echo $job_state
+     job_state=$(aws emr-serverless get-job-run --region us-west-2 --application-id $APPLICATION_ID --job-run-id $JOB_RUN_ID | /usr/bin/jq --raw-output '.jobRun.state')
+     mask_job_state=$(aws emr-serverless get-job-run --region us-west-2 --application-id $APPLICATION_ID --job-run-id $MASK_JOB_RUN_ID | /usr/bin/jq --raw-output '.jobRun.state')
+     echo "ccf=$job_state mask=$mask_job_state"
  done
 
- echo "Job complete"
- 
-python update_smartsheet.py
-echo "SmartSheet Updated -- CCF Fusion Complete"
+ echo "CCF fusion: $job_state ; Mask fusion: $mask_job_state"
 
- # (3) Clean up: stop and delete application 
+ # Bare-minimum metadata: emit a process record (upload capsule -> validated v2).
+ python emit_fusion_record.py "$fusion_start" || echo "metadata emit failed (non-fatal)"
+
+python update_smartsheet.py
+echo "SmartSheet Updated -- CCF Fusion + Mask Complete"
+
+ # (3) Clean up: stop and delete application
  #aws emr-serverless stop-application \
  #    --application-id $APPLICATION_ID
- 
+
