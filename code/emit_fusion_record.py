@@ -47,6 +47,7 @@ def main() -> None:
         code_version=os.environ.get("CODE_VERSION", "0.0.0"),
         run_script="/code/run",
         language="Java",
+        experimenters=["Peter Grotz"],
         parameters={
             "input_xml": "tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.xml",
             "main_class": "net.preibisch.bigstitcher.spark.SparkAffineFusion",
