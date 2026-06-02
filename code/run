@@ -200,11 +200,24 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
 
  echo "CCF fusion: $job_state ; Mask fusion: $mask_job_state"
 
+ # Fail-fast: the CCF channel fusion is REQUIRED. If it did not succeed, stop the
+ # pipeline here so we never ship an empty/stale fused_ccf_ch.zarr or post a false
+ # "Complete". The MASK fusion is an OPTIONAL registration intermediate --
+ # registration skips mask restriction gracefully when it is missing -- so a mask
+ # failure is only a warning and does NOT stop the pipeline.
+ if [ "$job_state" != "SUCCESS" ]; then
+     echo "ERROR: CCF channel fusion did not succeed (ccf=$job_state mask=$mask_job_state); aborting." >&2
+     exit 1
+ fi
+ if [ "$mask_job_state" != "SUCCESS" ]; then
+     echo "WARNING: mask fusion did not succeed (mask=$mask_job_state); continuing without the fused mask -- registration will run unmasked for this subject." >&2
+ fi
+
  # Bare-minimum metadata: emit a process record (upload capsule -> validated v2).
  python emit_fusion_record.py "$fusion_start" || echo "metadata emit failed (non-fatal)"
 
 python update_smartsheet.py
-echo "SmartSheet Updated -- CCF Fusion + Mask Complete"
+echo "SmartSheet update step done -- CCF channel fusion SUCCESS (mask=$mask_job_state)"
 
  # (3) Clean up: stop and delete application
  #aws emr-serverless stop-application \

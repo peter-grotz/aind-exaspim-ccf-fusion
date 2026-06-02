@@ -17,8 +17,13 @@ import re
 
 
 def main():
-    # Update SmartSheet
-    access_token = "9Mx3umDssV5ugK9roAf9EEXQPmZq2ovX7tPyR"
+    # Update SmartSheet. The API token comes from the SMARTSHEET_TOKEN env var (a
+    # secret), never hard-coded. If it is unset (e.g. scratch test runs), skip the
+    # update so we never touch the production tracking sheet.
+    access_token = os.environ.get("SMARTSHEET_TOKEN")
+    if not access_token:
+        print("SMARTSHEET_TOKEN not set; skipping SmartSheet update.")
+        return
     brain_id = find_brain_id()
     update_smartsheet(brain_id, access_token)
 
