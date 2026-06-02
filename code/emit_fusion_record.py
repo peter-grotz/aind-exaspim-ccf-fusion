@@ -2,16 +2,14 @@
 """Bare-minimum metadata for the CCF fusion capsule.
 
 Emits a v2 DataProcess document (*_data_process.json) describing the CCF channel
-fusion (and the mask fusion done with the same transforms). aind-metadata-manager
-(in the upload capsule) collects + validates it. Because fusion writes to S3 (not
-through the nextflow channel to upload), the file is also copied to the asset's
-S3 fusion/ folder; the upload capsule fetches *_data_process.json from there.
+fusion (and the mask fusion done with the same transforms) to /results ONLY.
+It is NOT published to S3: it flows to the upload capsule via the pipeline's
+/results channel, where aind-metadata-manager merges it into the ROOT
+processing.json. The existing fusion/processing.json on S3 is left untouched.
 
 Usage: python emit_fusion_record.py [START_ISO]
 """
-import json
 import os
-import subprocess
 import sys
 from datetime import datetime, timezone
 
@@ -25,22 +23,6 @@ def _now():
 def main() -> None:
     start = sys.argv[1] if len(sys.argv) > 1 else _now()
     end = _now()
-
-    # provenance from the manifest
-    manifest = next((os.path.join("../data", f) for f in os.listdir("../data")
-                     if f.endswith(".json")), None)
-    input_uri = ""
-    if manifest:
-        try:
-            input_uri = str(json.load(open(manifest)).get("zarr_multiscale", {}).get("input_uri", ""))
-        except Exception:
-            pass
-    in_base = input_uri.split("/fusion/")[0] if "/fusion/" in input_uri else ""
-    # outputs go to OUTPUT_PREFIX/<asset_name> when set (scratch test dir), else
-    # alongside the input asset.
-    prefix = os.environ.get("OUTPUT_PREFIX")
-    base = (f"{prefix.rstrip('/')}/{in_base.rstrip('/').split('/')[-1]}"
-            if (prefix and in_base) else in_base)
 
     data_process = make_data_process(
         process_type="Image tile fusing",
@@ -68,15 +50,12 @@ def main() -> None:
                "intermediate)."),
     )
 
+    # Write the data_process to /results ONLY (NOT to S3). It reaches the upload
+    # capsule via the pipeline's /results channel, where it is merged into the
+    # ROOT processing.json. We deliberately do not publish it to the S3 asset, and
+    # the existing fusion/processing.json on S3 is left untouched.
     local = write_data_process(data_process, "/results/fusion")
-    print(f"wrote {local}")
-
-    # bridge to the upload capsule: copy the data_process file into the asset's
-    # S3 fusion/ folder; the upload capsule fetches *_data_process.json from there.
-    if base:
-        dest = f"{base}/fusion/{os.path.basename(local)}"
-        subprocess.run(["aws", "s3", "cp", local, dest], check=False)
-        print(f"copied data_process to {dest}")
+    print(f"wrote {local} (results-only; not published to S3)")
 
 
 if __name__ == "__main__":
