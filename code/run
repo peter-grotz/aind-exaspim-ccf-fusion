@@ -211,6 +211,16 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
  fi
  if [ "$mask_job_state" != "SUCCESS" ]; then
      echo "WARNING: mask fusion did not succeed (mask=$mask_job_state); continuing without the fused mask -- registration will run unmasked for this subject." >&2
+     # The mask container + OME-Zarr metadata are created UP FRONT
+     # (create-fusion-container, above), so a failed mask job leaves an EMPTY
+     # fused_mask_ch.zarr behind (structure present, pixels never filled). If we
+     # leave it, registration's _load_fused_mask opens it successfully, reads
+     # all-zeros, and multiplies that into the sample -> ANTs aborts with "Total
+     # Mass of the image was zero". Delete it so the mask is ABSENT, which is the
+     # cross-capsule signal that turns registration unmasked (it handles a missing
+     # mask gracefully == USE_FUSED_MASK off for this subject). Best-effort.
+     echo "Deleting empty/partial fused mask container: ${mask_zarr_location}" >&2
+     aws s3 rm --recursive "${mask_zarr_location}/" || echo "  (mask container cleanup failed or nothing to remove; non-fatal)" >&2
  fi
 
  # Bare-minimum metadata: emit a process record (upload capsule -> validated v2).
