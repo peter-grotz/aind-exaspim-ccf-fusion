@@ -224,7 +224,10 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
  fi
 
  # Bare-minimum metadata: emit a process record (upload capsule -> validated v2).
- python emit_fusion_record.py "$fusion_start" || echo "metadata emit failed (non-fatal)"
+ # Pass the mask fusion status so processing.json records whether the flat-field
+ # mask was actually fused (mask_fused / mask_fusion_status) -- when it failed, the
+ # record notes the mask was dropped and registration ran unmasked.
+ python emit_fusion_record.py "$fusion_start" "$mask_job_state" || echo "metadata emit failed (non-fatal)"
 
 python update_smartsheet.py
 echo "SmartSheet update step done -- CCF channel fusion SUCCESS (mask=$mask_job_state)"
