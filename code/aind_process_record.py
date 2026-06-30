@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
-"""Emit v2 DataProcess JSON files ("*_data_process.json") for PRODUCER capsules.
+"""Build and write v2 DataProcess JSON files ("*_data_process.json").
 
-Architecture: producer capsules drop one `*_data_process.json` per processing
-step (a valid aind-data-schema v2 DataProcess document). The UPLOAD capsule runs
-`aind-metadata-manager`, which collects every `*_data_process.json`, validates
-each as a DataProcess, merges them with upstream `processing.json` files, and
-writes the aggregated top-level `processing.json`.
+Each producer capsule drops one *_data_process.json per processing step. The
+upload capsule runs aind-metadata-manager, which collects, validates, and merges
+them into the top-level processing.json.
 
-This module is STDLIB-ONLY on purpose, so it runs unchanged in every producer
-env (incl. Python 3.9). It hand-builds the DataProcess dict — the upload
-capsule's aind-data-schema validates it centrally.
+Stdlib-only so it runs unchanged in any producer env (incl. Python 3.9); the
+DataProcess dict is hand-built and validated centrally by the upload capsule.
 
-Vendoring: copy this file into each producer capsule's `code/`; keep the
-canonical copy in `_capsules/_shared/`.
+Vendored: copy this file into each producer capsule's code/; keep the canonical
+copy in _capsules/_shared/.
 
 Usage (in a producer):
     from aind_process_record import make_data_process, write_data_process
@@ -70,8 +67,7 @@ def make_data_process(
     notes: str | None = None,
     pipeline_name: str | None = PIPELINE_NAME,
 ) -> dict:
-    """Build one v2 DataProcess document (plain dict). Validated centrally by
-    aind-metadata-manager in the upload capsule."""
+    """Build one v2 DataProcess document as a plain dict."""
     return {
         "object_type": "Data process",
         "process_type": process_type,

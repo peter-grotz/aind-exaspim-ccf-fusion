@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-"""Bare-minimum metadata for the CCF fusion capsule.
+"""Emit the CCF fusion process record.
 
-Emits a v2 DataProcess document (*_data_process.json) describing the CCF channel
-fusion (and the mask fusion done with the same transforms) to /results ONLY.
-It is NOT published to S3: it flows to the upload capsule via the pipeline's
-/results channel, where aind-metadata-manager merges it into the ROOT
-processing.json. The existing fusion/processing.json on S3 is left untouched.
+Writes a v2 DataProcess document (*_data_process.json) describing the CCF channel
+fusion to /results only. It is not published to S3; the upload capsule merges it
+into the root processing.json.
 
 Usage: python emit_fusion_record.py [START_ISO] [MASK_FUSION_STATUS]
-  MASK_FUSION_STATUS is the EMR mask job's terminal state (SUCCESS/FAILED/...);
-  it is recorded so the processing.json shows whether the flat-field mask was
-  actually fused (and thus whether registration ran masked).
+  MASK_FUSION_STATUS is the EMR mask job's terminal state (SUCCESS/FAILED/...),
+  recorded so processing.json shows whether the flat-field mask was fused.
 """
 import os
 import sys
@@ -25,9 +22,8 @@ def _now():
 
 def main() -> None:
     start = sys.argv[1] if len(sys.argv) > 1 else _now()
-    # Mask fusion status (EMR terminal state). Recorded so processing.json reflects
-    # whether the flat-field mask was actually produced; if not, registration runs
-    # unmasked and we do NOT claim a fused_mask_ch.zarr output.
+    # Mask fusion status (EMR terminal state). If not SUCCESS, the record omits
+    # the fused_mask_ch.zarr output and notes registration runs unmasked.
     mask_status = (sys.argv[2] if len(sys.argv) > 2
                    else os.environ.get("MASK_FUSION_STATUS", "UNKNOWN"))
     mask_ok = mask_status.strip().upper() == "SUCCESS"
@@ -67,10 +63,8 @@ def main() -> None:
         notes="Fuses the CCF-alignment channel; " + mask_note,
     )
 
-    # Write the data_process to /results ONLY (NOT to S3). It reaches the upload
-    # capsule via the pipeline's /results channel, where it is merged into the
-    # ROOT processing.json. We deliberately do not publish it to the S3 asset, and
-    # the existing fusion/processing.json on S3 is left untouched.
+    # Write to /results only; the upload capsule merges it into the root
+    # processing.json. Not published to S3.
     local = write_data_process(data_process, "/results/fusion")
     print(f"wrote {local} (results-only; not published to S3)")
 

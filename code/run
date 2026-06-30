@@ -3,14 +3,13 @@
 set -ex
 
 
- # Extract bigstitcher xml path
+ # Get the bigstitcher XML path from the manifest.
 json_path="../data/exaspim_manifest1.json"
 path=$(jq -r '."zarr_multiscale"."input_uri"' "$json_path")
-in_base="${path%%/fusion/*}"   # read inputs from here (e.g. the aind-open-data asset)
+in_base="${path%%/fusion/*}"   # input asset base
 asset_name="${in_base##*/}"
-# Outputs go to ${OUTPUT_PREFIX}/<asset_name> when OUTPUT_PREFIX is set (e.g. a
-# scratch test dir like s3://aind-scratch-data/exaspim_processing_test);
-# otherwise they go alongside the input asset (production).
+# Outputs go to ${OUTPUT_PREFIX}/<asset_name> when OUTPUT_PREFIX is set,
+# otherwise alongside the input asset.
 if [ -n "$OUTPUT_PREFIX" ]; then out_base="${OUTPUT_PREFIX%/}/${asset_name}"; else out_base="${in_base}"; fi
 s3_xml_path="${in_base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.xml"
 
@@ -35,23 +34,15 @@ s3_xml_path="${in_base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_c
 
 
  #--------------------------------#
- # GOAL 3: derive a mask BigStitcher XML from the CCF-channel split XML by
- # repointing ONLY the image-loader base path from
- #   .../flatfield_correction/SPIM.ome.zarr/      (CCF channel tiles)
- # to
- #   .../flatfield_correction/mask/SPIM.ome.zarr/ (mask tiles, same names).
- # Every <ViewRegistration> transform is preserved, so the mask is fused with
- # the EXACT same transforms as the CCF channel, into the same space. The mask
- # fusion is submitted CONCURRENTLY with the CCF fusion (below).
- # fused_mask_ch.zarr is a registration-only intermediate (-> nii.gz in the
- # registration capsule, matched to the CCF/template mask); NOT a published channel.
+ # Derive a mask BigStitcher XML from the CCF-channel XML by repointing only the
+ # image-loader base path to the mask tiles (.../mask/SPIM.ome.zarr/). All
+ # transforms are preserved, so the mask fuses into the same space as the CCF
+ # channel. fused_mask_ch.zarr is a registration-only intermediate, not a
+ # published channel.
  #--------------------------------#
  mask_xml_local=/results/bigstitcher_split_affine_mask.xml
  mask_xml_s3="${out_base}/fusion/bigstitcher_split_affine_mask.xml"
  mask_zarr_location="${out_base}/fusion/fused_mask_ch.zarr"
- # Download the CCF-channel XML from the INPUT asset; the in-XML data paths keep
- # pointing at aind-open-data (mask tiles are read from there), only the output
- # zarr targets are redirected.
  aws s3 cp "${s3_xml_path}" "${mask_xml_local}"
  sed -i 's#/flatfield_correction/SPIM.ome.zarr/#/flatfield_correction/mask/SPIM.ome.zarr/#g' "${mask_xml_local}"
  aws s3 cp "${mask_xml_local}" "${mask_xml_s3}"
@@ -63,7 +54,7 @@ s3_xml_path="${in_base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_c
  #--------------------------------#
  #--------------------------------#
 
- # Build fusion containers for BOTH the CCF channel and the mask up front.
+ # Build the fusion containers for the CCF channel and the mask.
 sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
   -x "${s3_xml_path}" \
   -o "${zarr_location}" \
@@ -115,8 +106,7 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
  APPLICATION_ID=$(echo $create_app | /usr/bin/jq --raw-output '.applicationId')
  echo "My application's ID: $APPLICATION_ID"
  #
- # Poll startup state.
- # Once application is created, start it.
+ # Wait until the application is created, then start it.
  until [ "$app_state" = "CREATED" ];
  do
      get_state=$(aws emr-serverless get-application \
@@ -131,11 +121,11 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
  echo "Job Started"
 
 
- # 2) Run the fusion, just need to input s3_xml_path and n5_location
+ # 2) Run the CCF channel fusion.
  JOB_ROLE_ARN="arn:aws:iam::467914378000:role/aind-emr-role"
  # JOB_ROLE_ARN="arn:aws:iam::467914378000:role/aind-codeocean-power-user"
 
- # entryPointArguments must be formatted as a long list-- string parsing is not robust
+ # entryPointArguments must be a list, one element per token.
  run_job=$(aws emr-serverless start-job-run \
      --region us-west-2 \
      --application-id $APPLICATION_ID \
@@ -160,8 +150,8 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
 
  JOB_RUN_ID=$(echo $run_job | /usr/bin/jq --raw-output '.jobRunId')
 
- # Submit the MASK fusion CONCURRENTLY (same EMR application, same transforms
- # via the mask container created above). Output -> fused_mask_ch.zarr.
+ # Submit the mask fusion concurrently on the same EMR application.
+ # Output -> fused_mask_ch.zarr.
  mask_job=$(aws emr-serverless start-job-run \
      --region us-west-2 \
      --application-id $APPLICATION_ID \
@@ -186,7 +176,7 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
 
  MASK_JOB_RUN_ID=$(echo $mask_job | /usr/bin/jq --raw-output '.jobRunId')
 
- # Poll BOTH jobs until each reaches a terminal state.
+ # Poll both jobs until each reaches a terminal state.
  job_state=""
  mask_job_state=""
  until { [ "$job_state" = "SUCCESS" ] || [ "$job_state" = "FAILED" ]; } \
@@ -200,39 +190,29 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
 
  echo "CCF fusion: $job_state ; Mask fusion: $mask_job_state"
 
- # Fail-fast: the CCF channel fusion is REQUIRED. If it did not succeed, stop the
- # pipeline here so we never ship an empty/stale fused_ccf_ch.zarr or post a false
- # "Complete". The MASK fusion is an OPTIONAL registration intermediate --
- # registration skips mask restriction gracefully when it is missing -- so a mask
- # failure is only a warning and does NOT stop the pipeline.
+ # The CCF channel fusion is required: abort if it failed. The mask fusion is
+ # optional, so its failure is only a warning.
  if [ "$job_state" != "SUCCESS" ]; then
      echo "ERROR: CCF channel fusion did not succeed (ccf=$job_state mask=$mask_job_state); aborting." >&2
      exit 1
  fi
  if [ "$mask_job_state" != "SUCCESS" ]; then
      echo "WARNING: mask fusion did not succeed (mask=$mask_job_state); continuing without the fused mask -- registration will run unmasked for this subject." >&2
-     # The mask container + OME-Zarr metadata are created UP FRONT
-     # (create-fusion-container, above), so a failed mask job leaves an EMPTY
-     # fused_mask_ch.zarr behind (structure present, pixels never filled). If we
-     # leave it, registration's _load_fused_mask opens it successfully, reads
-     # all-zeros, and multiplies that into the sample -> ANTs aborts with "Total
-     # Mass of the image was zero". Delete it so the mask is ABSENT, which is the
-     # cross-capsule signal that turns registration unmasked (it handles a missing
-     # mask gracefully == USE_FUSED_MASK off for this subject). Best-effort.
+     # The container was created up front, so a failed mask job leaves an empty
+     # fused_mask_ch.zarr behind. Delete it (best-effort) so the mask is absent,
+     # which signals registration to run unmasked.
      echo "Deleting empty/partial fused mask container: ${mask_zarr_location}" >&2
      aws s3 rm --recursive "${mask_zarr_location}/" || echo "  (mask container cleanup failed or nothing to remove; non-fatal)" >&2
  fi
 
- # Bare-minimum metadata: emit a process record (upload capsule -> validated v2).
- # Pass the mask fusion status so processing.json records whether the flat-field
- # mask was actually fused (mask_fused / mask_fusion_status) -- when it failed, the
- # record notes the mask was dropped and registration ran unmasked.
+ # Emit the process record. Pass the mask fusion status so processing.json
+ # records whether the flat-field mask was fused.
  python emit_fusion_record.py "$fusion_start" "$mask_job_state" || echo "metadata emit failed (non-fatal)"
 
 python update_smartsheet.py
 echo "SmartSheet update step done -- CCF channel fusion SUCCESS (mask=$mask_job_state)"
 
- # (3) Clean up: stop and delete application
+ # (3) Clean up: stop and delete the application.
  #aws emr-serverless stop-application \
  #    --application-id $APPLICATION_ID
 

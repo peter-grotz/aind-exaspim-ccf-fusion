@@ -1,7 +1,8 @@
-#Things to change when you download a new version of bigstitcher to make a pom file:
-#1. manually copy resources
-#2. edit pom file to comment the "provided" line and the SNAAPSHOT for n5-aws-s3
-# after compiling, run ./install and you can create the fat jar executable by editing create-fusion-container-fatjar or copy from previous version
+# Steps when building the pom for a new bigstitcher version:
+# 1. manually copy resources
+# 2. edit the pom to comment the "provided" line and the SNAPSHOT for n5-aws-s3
+# After compiling, run ./install; create the fat jar by editing
+# create-fusion-container-fatjar or copying from a previous version.
 
 
 export JAVA_HOME=/code/zulu8.80.0.17-ca-fx-jdk8.0.422-linux_x64/jre
@@ -32,5 +33,5 @@ mvn -Denforcer.skip=true clean package -P fatjar
 
 ##cp ~/.m2/repository/net/preibisch/BigStitcher-Spark/0.0.2-SNAPSHOT/BigStitcher-Spark-0.0.2-SNAPSHOT.jar ../../scratch/
 
-#copied blosc libraries to java resources (sebastian's notes in email on Nov 2024)
+# Build the fat jar (requires the blosc libraries in the Java resources).
 mvn clean package -U -P fatjar

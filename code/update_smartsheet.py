@@ -1,12 +1,4 @@
-"""
-Created on Wed Dec 3 14:00:00 2025
-
-@author: Anna Grim
-@email: anna.grim@alleninstitute.org
-
-Code for updating SmartSheet after CCF fusion has completed.
-
-"""
+"""Marks a brain's row in SmartSheet as CCF-fused after fusion completes."""
 
 from aind_exaspim_dataset_utils.smartsheet_util import SmartSheetClient
 from datetime import datetime
@@ -17,9 +9,7 @@ import re
 
 
 def main():
-    # Update SmartSheet. The API token comes from the SMARTSHEET_TOKEN env var (a
-    # secret), never hard-coded. If it is unset (e.g. scratch test runs), skip the
-    # update so we never touch the production tracking sheet.
+    # Read the API token from the SMARTSHEET_TOKEN env var; skip the update if unset.
     access_token = os.environ.get("SMARTSHEET_TOKEN")
     if not access_token:
         print("SMARTSHEET_TOKEN not set; skipping SmartSheet update.")
