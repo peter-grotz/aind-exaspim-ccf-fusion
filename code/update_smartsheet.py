@@ -8,6 +8,17 @@ import os
 import re
 
 
+class PaginatedSmartSheetClient(SmartSheetClient):
+    # list_sheets() returns only the first 100 sheets by default;
+    # include_all=True returns every sheet so the name lookup is reliable.
+    def find_sheet_id(self):
+        response = self.client.Sheets.list_sheets(include_all=True)
+        for sheet in response.data:
+            if sheet.name == self.sheet_name:
+                return sheet.id
+        raise Exception(f"Sheet Not Found - sheet_name={self.sheet_name}")
+
+
 def main():
     # Read the API token from the SMARTSHEET_TOKEN env var; skip the update if unset.
     access_token = os.environ.get("SMARTSHEET_TOKEN")
@@ -52,7 +63,7 @@ def find_manifest_json_path():
 def update_smartsheet(brain_id, access_token):
     # Initialize client
     sheet_name = "ExM Dataset Summary"
-    client = SmartSheetClient(access_token, sheet_name)
+    client = PaginatedSmartSheetClient(access_token, sheet_name)
     column_map = {col.title: col.id for col in client.sheet.columns}
 
     # Update SmartSheet
