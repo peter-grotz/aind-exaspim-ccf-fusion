@@ -2,6 +2,9 @@
 #!/usr/bin/env bash
 set -ex
 
+# NOTE: brain-mask fusion moved to the separate `aind-exaspim-mask-fusion` capsule
+# (Rhapso, local), which reads Zarr v3 masks that BigStitcher-Spark cannot. The
+# mask blocks below are commented out; this capsule now fuses only the CCF channel.
 
  # Get the bigstitcher XML path from the manifest.
 json_path="../data/exaspim_manifest1.json"
@@ -31,27 +34,20 @@ s3_xml_path="${in_base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_c
 
 
  #--------------------------------#
- # Derive a mask BigStitcher XML from the CCF-channel XML by repointing only the
- # image-loader base path to the mask tiles (.../mask/SPIM.ome.zarr/). All
- # transforms are preserved, so the mask fuses into the same space as the CCF
- # channel. fused_mask_ch.zarr is a registration-only intermediate, not a
- # published channel.
- #--------------------------------#
- mask_xml_local=/results/bigstitcher_split_affine_mask.xml
- mask_xml_s3="${out_base}/fusion/bigstitcher_split_affine_mask.xml"
- mask_zarr_location="${out_base}/fusion/fused_mask_ch.zarr"
- aws s3 cp "${s3_xml_path}" "${mask_xml_local}"
- sed -i 's#/flatfield_correction/SPIM.ome.zarr/#/flatfield_correction/mask/SPIM.ome.zarr/#g' "${mask_xml_local}"
- aws s3 cp "${mask_xml_local}" "${mask_xml_s3}"
- echo "mask_xml_s3=${mask_xml_s3}" >> $log_file
- echo "mask_zarr_location=${mask_zarr_location}" >> $log_file
+ # [MASK MOVED TO aind-exaspim-mask-fusion CAPSULE] mask XML derivation:
+ # mask_xml_local=/results/bigstitcher_split_affine_mask.xml
+ # mask_xml_s3="${out_base}/fusion/bigstitcher_split_affine_mask.xml"
+ # mask_zarr_location="${out_base}/fusion/fused_mask_ch.zarr"
+ # aws s3 cp "${s3_xml_path}" "${mask_xml_local}"
+ # sed -i 's#/flatfield_correction/SPIM.ome.zarr/#/flatfield_correction/mask/SPIM.ome.zarr/#g' "${mask_xml_local}"
+ # aws s3 cp "${mask_xml_local}" "${mask_xml_s3}"
+ # echo "mask_xml_s3=${mask_xml_s3}" >> $log_file
+ # echo "mask_zarr_location=${mask_zarr_location}" >> $log_file
 
 
  #--------------------------------#
- #--------------------------------#
- #--------------------------------#
 
- # Build the fusion containers for the CCF channel and the mask.
+ # Build the fusion container for the CCF channel.
 sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
   -x "${s3_xml_path}" \
   -o "${zarr_location}" \
@@ -61,14 +57,15 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
   -s ZARR \
   --anisotropyFactor 1
 
-sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
-  -x "${mask_xml_s3}" \
-  -o "${mask_zarr_location}" \
-  -d UINT16 \
-  --multiRes \
-  --blockSize 256,256,256 \
-  -s ZARR \
-  --anisotropyFactor 1
+ # [MASK MOVED TO aind-exaspim-mask-fusion CAPSULE] mask container:
+ # sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
+ #   -x "${mask_xml_s3}" \
+ #   -o "${mask_zarr_location}" \
+ #   -d UINT16 \
+ #   --multiRes \
+ #   --blockSize 256,256,256 \
+ #   -s ZARR \
+ #   --anisotropyFactor 1
 
 
  # 1) Create application
@@ -147,69 +144,48 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
 
  JOB_RUN_ID=$(echo $run_job | /usr/bin/jq --raw-output '.jobRunId')
 
- # Submit the mask fusion concurrently on the same EMR application.
- # Output -> fused_mask_ch.zarr.
- mask_job=$(aws emr-serverless start-job-run \
-     --region us-west-2 \
-     --application-id $APPLICATION_ID \
-     --execution-role-arn $JOB_ROLE_ARN \
-     --name "${job_name}_mask" \
-     --job-driver '{
-         "sparkSubmit": {
-             "entryPoint": "s3://aind-scratch-data/sharmi.seshamani/BigStitcher-Spark-0.1.0-SNAPSHOT_09-04-25.jar",
-             "entryPointArguments": ["--blockScale","4,4,4",  "-o", "'"${mask_zarr_location}"'", "-s", "ZARR"],
-             "sparkSubmitParameters": "--class net.preibisch.bigstitcher.spark.SparkAffineFusion --conf spark.default.parallelism=120 --conf spark.driver.cores=1 --conf spark.driver.memory=6g --conf spark.executor.cores=16 --conf spark.executor.memory=53g --conf spark.emr-serverless.memoryOverheadFactor=0.12  --conf spark.executorEnv.REGION=us-west-2 --conf spark.emr-serverless.driverEnv.REGION=us-west-2 --conf spark.task.maxFailures=100 --conf spark.speculation=false  --conf spark.speculation.multiplier=1.5  --conf spark.speculation.quantile=0.75 --conf spark.hadoop.fs.s3a.multipart.size=134217728 --conf spark.excludeOnFailure.task.maxTaskAttemptsPerNode=1 --conf spark.dynamicAllocation.initialExecutors=2 --conf spark.hadoop.fs.s3a.connection.maximum=500 --conf spark.hadoop.fs.s3a.threads.max=512 --conf spark.hadoop.fs.s3a.retry.limit=20 --conf spark.hadoop.fs.s3a.retry.interval=500ms --conf spark.hadoop.fs.s3a.fast.upload=true --conf spark.hadoop.hive.metastore.client.factory.class=com.amazonaws.glue.catalog.metastore.AWSGlueDataCatalogHiveClientFactory"
-         }
-     }' \
-     --configuration-overrides '{
-         "monitoringConfiguration": {
-             "s3MonitoringConfiguration": {
-                 "logUri": "s3://aind-scratch-data/jonathan.wong/dask-emr/logs/"
-             }
-         }
-     }' \
-     --execution-timeout-minutes 14400
-     )
+ # [MASK MOVED TO aind-exaspim-mask-fusion CAPSULE] mask EMR job:
+ # mask_job=$(aws emr-serverless start-job-run \
+ #     --region us-west-2 \
+ #     --application-id $APPLICATION_ID \
+ #     --execution-role-arn $JOB_ROLE_ARN \
+ #     --name "${job_name}_mask" \
+ #     --job-driver '{ "sparkSubmit": { "entryPoint": ".../BigStitcher-Spark...jar",
+ #         "entryPointArguments": ["--blockScale","4,4,4","-o","'"${mask_zarr_location}"'","-s","ZARR"],
+ #         "sparkSubmitParameters": "--class net.preibisch.bigstitcher.spark.SparkAffineFusion ..." } }' \
+ #     --configuration-overrides '{ ... }' \
+ #     --execution-timeout-minutes 14400 )
+ # MASK_JOB_RUN_ID=$(echo $mask_job | /usr/bin/jq --raw-output '.jobRunId')
 
- MASK_JOB_RUN_ID=$(echo $mask_job | /usr/bin/jq --raw-output '.jobRunId')
-
- # Poll both jobs until each reaches a terminal state.
+ # Poll the CCF job until it reaches a terminal state.
  job_state=""
- mask_job_state=""
- until { [ "$job_state" = "SUCCESS" ] || [ "$job_state" = "FAILED" ]; } \
-    && { [ "$mask_job_state" = "SUCCESS" ] || [ "$mask_job_state" = "FAILED" ]; };
+ until [ "$job_state" = "SUCCESS" ] || [ "$job_state" = "FAILED" ];
  do
      sleep 10
      job_state=$(aws emr-serverless get-job-run --region us-west-2 --application-id $APPLICATION_ID --job-run-id $JOB_RUN_ID | /usr/bin/jq --raw-output '.jobRun.state')
-     mask_job_state=$(aws emr-serverless get-job-run --region us-west-2 --application-id $APPLICATION_ID --job-run-id $MASK_JOB_RUN_ID | /usr/bin/jq --raw-output '.jobRun.state')
-     echo "ccf=$job_state mask=$mask_job_state"
+     echo "ccf=$job_state"
  done
 
- echo "CCF fusion: $job_state ; Mask fusion: $mask_job_state"
+ echo "CCF fusion: $job_state"
 
- # The CCF channel fusion is required: abort if it failed. The mask fusion is
- # optional, so its failure is only a warning.
+ # The CCF channel fusion is required: abort if it failed.
  if [ "$job_state" != "SUCCESS" ]; then
-     echo "ERROR: CCF channel fusion did not succeed (ccf=$job_state mask=$mask_job_state); aborting." >&2
+     echo "ERROR: CCF channel fusion did not succeed (ccf=$job_state); aborting." >&2
      exit 1
  fi
- if [ "$mask_job_state" != "SUCCESS" ]; then
-     echo "WARNING: mask fusion did not succeed (mask=$mask_job_state); continuing without the fused mask -- registration will run unmasked for this subject." >&2
-     # The container was created up front, so a failed mask job leaves an empty
-     # fused_mask_ch.zarr behind. Delete it (best-effort) so the mask is absent,
-     # which signals registration to run unmasked.
-     echo "Deleting empty/partial fused mask container: ${mask_zarr_location}" >&2
-     aws s3 rm --recursive "${mask_zarr_location}/" || echo "  (mask container cleanup failed or nothing to remove; non-fatal)" >&2
- fi
+ # [MASK MOVED TO aind-exaspim-mask-fusion CAPSULE] mask job failure handling:
+ # if [ "$mask_job_state" != "SUCCESS" ]; then
+ #     echo "WARNING: mask fusion did not succeed ..." >&2
+ #     aws s3 rm --recursive "${mask_zarr_location}/" || echo "  (cleanup non-fatal)" >&2
+ # fi
 
- # Emit the process record. Pass the mask fusion status so processing.json
- # records whether the flat-field mask was fused.
- python emit_fusion_record.py "$fusion_start" "$mask_job_state" || echo "metadata emit failed (non-fatal)"
+ # Emit the CCF fusion process record. The mask is fused/recorded by the separate
+ # aind-exaspim-mask-fusion capsule.
+ python emit_fusion_record.py "$fusion_start" || echo "metadata emit failed (non-fatal)"
 
 python update_smartsheet.py
-echo "SmartSheet update step done -- CCF channel fusion SUCCESS (mask=$mask_job_state)"
+echo "SmartSheet update step done -- CCF channel fusion SUCCESS"
 
  # (3) Clean up: stop and delete the application.
  #aws emr-serverless stop-application \
  #    --application-id $APPLICATION_ID
-

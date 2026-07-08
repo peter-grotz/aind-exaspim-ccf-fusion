@@ -5,9 +5,10 @@ Writes a v2 DataProcess document (*_data_process.json) describing the CCF channe
 fusion to /results only. It is not published to S3; the upload capsule merges it
 into the root processing.json.
 
-Usage: python emit_fusion_record.py [START_ISO] [MASK_FUSION_STATUS]
-  MASK_FUSION_STATUS is the EMR mask job's terminal state (SUCCESS/FAILED/...),
-  recorded so processing.json shows whether the flat-field mask was fused.
+The flat-field brain mask is fused and recorded separately by the
+aind-exaspim-mask-fusion capsule (Rhapso).
+
+Usage: python emit_fusion_record.py [START_ISO]
 """
 import os
 import sys
@@ -22,11 +23,6 @@ def _now():
 
 def main() -> None:
     start = sys.argv[1] if len(sys.argv) > 1 else _now()
-    # Mask fusion status (EMR terminal state). If not SUCCESS, the record omits
-    # the fused_mask_ch.zarr output and notes registration runs unmasked.
-    mask_status = (sys.argv[2] if len(sys.argv) > 2
-                   else os.environ.get("MASK_FUSION_STATUS", "UNKNOWN"))
-    mask_ok = mask_status.strip().upper() == "SUCCESS"
     end = _now()
 
     parameters = {
@@ -35,17 +31,7 @@ def main() -> None:
         "block_scale": "4,4,4",
         "data_type": "UINT16",
         "storage_format": "ZARR",
-        "mask_fused": mask_ok,
-        "mask_fusion_status": mask_status,
     }
-    if mask_ok:
-        parameters["mask_output"] = "fusion/fused_mask_ch.zarr"
-        mask_note = ("also fuses the flat-field mask with identical transforms "
-                     "(fused_mask_ch.zarr, a registration-only intermediate).")
-    else:
-        mask_note = (f"the flat-field mask fusion did NOT succeed "
-                     f"(mask_fusion_status={mask_status}); the empty fused_mask_ch.zarr "
-                     f"container was removed, so registration runs UNMASKED for this subject.")
 
     data_process = make_data_process(
         process_type="Image tile fusing",
@@ -60,7 +46,8 @@ def main() -> None:
         experimenters=["Peter Grotz"],
         parameters=parameters,
         output_path="fusion/fused_ccf_ch.zarr",
-        notes="Fuses the CCF-alignment channel; " + mask_note,
+        notes=("Fuses the CCF-alignment channel. The flat-field brain mask is fused "
+               "separately by the aind-exaspim-mask-fusion capsule."),
     )
 
     # Write to /results only; the upload capsule merges it into the root
