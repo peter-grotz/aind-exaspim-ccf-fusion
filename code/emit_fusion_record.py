@@ -8,7 +8,7 @@ into the root processing.json.
 The flat-field brain mask is fused and recorded separately by the
 aind-exaspim-mask-fusion capsule (Rhapso).
 
-Usage: python emit_fusion_record.py [START_ISO]
+Usage: python emit_fusion_record.py [START_ISO] [INPUT_XML_REL] [CHANNEL]
 """
 import os
 import sys
@@ -23,10 +23,18 @@ def _now():
 
 def main() -> None:
     start = sys.argv[1] if len(sys.argv) > 1 else _now()
+    input_xml = sys.argv[2] if len(sys.argv) > 2 else None
+    channel = sys.argv[3] if len(sys.argv) > 3 else None
     end = _now()
 
     parameters = {
-        "input_xml": "tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.xml",
+        # Resolved at run time by code/run: the CCF XML lives under ch_ccf_xmls/ on
+        # assets processed through ~2026-07 and under rhapso/ on later ones, so record
+        # which one this run actually read rather than assuming the legacy path. The
+        # channel likewise varies per asset (ch_488 on some, ch_561 on others), and
+        # without it the record cannot identify the fused input at all.
+        "input_xml": input_xml or "unresolved",
+        "channel": channel or "unknown",
         "main_class": "net.preibisch.bigstitcher.spark.SparkAffineFusion",
         "block_scale": "4,4,4",
         "data_type": "UINT16",

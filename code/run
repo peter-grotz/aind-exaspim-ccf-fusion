@@ -24,6 +24,7 @@ for rel in "tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.xml" \
            "tile_alignment/rhapso/rhapso-solver-split-affine-ccf.xml"; do
     if aws s3api head-object --bucket "$bucket" --key "${asset_key}/${rel}" >/dev/null 2>&1; then
         s3_xml_path="${in_base}/${rel}"
+        ccf_xml_rel="${rel}"          # recorded in the process metadata
         echo "CCF XML resolved to: ${rel}"
         break
     fi
@@ -203,9 +204,17 @@ sh /code/BigStitcher-Spark_March2025/create-fusion-container-fromfatjar \
 
  # Emit the CCF fusion process record. The mask is fused/recorded by the separate
  # aind-exaspim-mask-fusion capsule.
- python emit_fusion_record.py "$fusion_start" || echo "metadata emit failed (non-fatal)"
+ # Which channel was fused is not fixed -- ch_488 on some assets, ch_561 on others --
+ # and it is only discoverable from the XML's tile paths, so read it back for the record.
+ ccf_channel=$(aws s3 cp "${s3_xml_path}" - 2>/dev/null | grep -oE 'ch_[0-9]+' | head -n1 || true)
+ echo "ccf channel: ${ccf_channel:-unknown}"
 
-python update_smartsheet.py
+ python emit_fusion_record.py "$fusion_start" "${ccf_xml_rel}" "${ccf_channel}" || echo "metadata emit failed (non-fatal)"
+
+# Guarded: a SmartSheet problem must not discard a fusion that already succeeded. The
+# EMR job is complete and fused_ccf_ch.zarr is written by this point, so failing here
+# under set -e would throw away hours of compute over a spreadsheet update.
+python update_smartsheet.py || echo "SmartSheet update failed (non-fatal)"
 echo "SmartSheet update step done -- CCF channel fusion SUCCESS"
 
  # (3) Clean up: stop and delete the application.

@@ -36,11 +36,13 @@ def find_brain_id():
     uri = manifest['zarr_multiscale']['input_uri']
 
     # Extract brain ID
-    result = re.search(r'exaspim_(\d{6})', uri.lower())
+    # Prefix-agnostic: asset names dropped the "exaSPIM_" prefix when aind-data-schema
+    # went to v2 (v2 removed data_description.platform), so anchor on the acquisition
+    # datestamp that follows the subject id rather than requiring the platform prefix.
+    result = re.search(r'(?<!\d)(\d{6})_\d{4}-\d{2}-\d{2}', uri)
     if not result:
-        raise ValueError(f"Could not extract exaSPIM ID from {uri}")
-    brain_id = result.group(1)
-    return brain_id
+        raise ValueError(f"Could not extract subject id from {uri}")
+    return result.group(1)
 
 
 def read_json(path):
