@@ -11,7 +11,29 @@ json_path="../data/exaspim_manifest1.json"
 path=$(jq -r '."zarr_multiscale"."input_uri"' "$json_path")
 in_base="${path%%/fusion/*}"   # input asset base
 out_base="${in_base}"          # write outputs alongside the input asset
-s3_xml_path="${in_base}/tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.xml"
+
+# Resolve the CCF split-affine XML. Tile alignment switched from BigStitcher to
+# Rhapso and the file moved: assets processed through ~2026-07 carry
+# tile_alignment/ch_ccf_xmls/, later ones tile_alignment/rhapso/. Only one of the
+# two exists per asset, so probe both and take whichever is present. The legacy
+# path is tried first so a previously-fused sample re-fuses from the same XML.
+bucket=$(echo "$in_base" | awk -F'/' '{print $3}')
+asset_key="${in_base#s3://$bucket/}"
+s3_xml_path=""
+for rel in "tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.xml" \
+           "tile_alignment/rhapso/rhapso-solver-split-affine-ccf.xml"; do
+    if aws s3api head-object --bucket "$bucket" --key "${asset_key}/${rel}" >/dev/null 2>&1; then
+        s3_xml_path="${in_base}/${rel}"
+        echo "CCF XML resolved to: ${rel}"
+        break
+    fi
+    echo "CCF XML not at: ${rel}"
+done
+if [ -z "$s3_xml_path" ]; then
+    echo "ERROR: no CCF split-affine XML under ${in_base}/tile_alignment/ (checked both the" >&2
+    echo "       legacy ch_ccf_xmls/ and the Rhapso rhapso/ layouts); aborting." >&2
+    exit 1
+fi
 
 # Set output zarr location
  zarr_location="${out_base}/fusion/fused_ccf_ch.zarr"
