@@ -12,27 +12,63 @@ path=$(jq -r '."zarr_multiscale"."input_uri"' "$json_path")
 in_base="${path%%/fusion/*}"   # input asset base
 out_base="${in_base}"          # write outputs alongside the input asset
 
-# Resolve the CCF split-affine XML. Tile alignment switched from BigStitcher to
-# Rhapso and the file moved: assets processed through ~2026-07 carry
-# tile_alignment/ch_ccf_xmls/, later ones tile_alignment/rhapso/. Only one of the
-# two exists per asset, so probe both and take whichever is present. The legacy
-# path is tried first so a previously-fused sample re-fuses from the same XML.
+# Resolve the CCF split-affine XML. Three sources, in priority order:
+#   1. ccf_xml_uri in the manifest -- an explicit choice beats any guess, and which
+#      alignment run is best is not something a filename can express.
+#   2. The two historical fixed layouts (ch_ccf_xmls/, then rhapso/).
+#   3. tile_alignment/rhapso*/ directories, newest name first. Tile alignment now
+#      timestamps its output directory so repeat runs stop overwriting each other,
+#      which breaks every fixed-path lookup.
 bucket=$(echo "$in_base" | awk -F'/' '{print $3}')
 asset_key="${in_base#s3://$bucket/}"
 s3_xml_path=""
-for rel in "tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.xml" \
-           "tile_alignment/rhapso/rhapso-solver-split-affine-ccf.xml"; do
-    if aws s3api head-object --bucket "$bucket" --key "${asset_key}/${rel}" >/dev/null 2>&1; then
-        s3_xml_path="${in_base}/${rel}"
-        ccf_xml_rel="${rel}"          # recorded in the process metadata
-        echo "CCF XML resolved to: ${rel}"
-        break
+ccf_xml_rel=""
+
+explicit_xml=$(jq -r '."zarr_multiscale"."ccf_xml_uri" // empty' "$json_path")
+if [ -n "$explicit_xml" ]; then
+    # Reject an XML from a different asset: it would fuse another brain's geometry
+    # onto this one with nothing downstream to notice.
+    case "$explicit_xml" in
+        "${in_base}"/*) ;;
+        *) echo "ERROR: ccf_xml_uri is not under the input asset:" >&2
+           echo "         ${explicit_xml}" >&2
+           echo "       expected a path under ${in_base}/" >&2
+           exit 1 ;;
+    esac
+    rel="${explicit_xml#${in_base}/}"
+    if ! aws s3api head-object --bucket "$bucket" --key "${asset_key}/${rel}" >/dev/null 2>&1; then
+        echo "ERROR: ccf_xml_uri does not exist: ${explicit_xml}" >&2
+        exit 1
     fi
-    echo "CCF XML not at: ${rel}"
-done
+    s3_xml_path="$explicit_xml"
+    ccf_xml_rel="$rel"
+    echo "CCF XML (explicit) resolved to: ${rel}"
+fi
+
 if [ -z "$s3_xml_path" ]; then
-    echo "ERROR: no CCF split-affine XML under ${in_base}/tile_alignment/ (checked both the" >&2
-    echo "       legacy ch_ccf_xmls/ and the Rhapso rhapso/ layouts); aborting." >&2
+    rhapso_rels=$(aws s3api list-objects-v2 --bucket "$bucket" \
+        --prefix "${asset_key}/tile_alignment/" --delimiter '/' \
+        --query 'CommonPrefixes[].Prefix' --output text 2>/dev/null \
+        | tr '\t' '\n' | sed "s#^${asset_key}/##" \
+        | grep '^tile_alignment/rhapso' | sort -r \
+        | sed 's#$#rhapso-solver-split-affine-ccf.xml#')
+    for rel in "tile_alignment/ch_ccf_xmls/bigstitcher_split_affine_ch_ccf.xml" \
+               "tile_alignment/rhapso/rhapso-solver-split-affine-ccf.xml" \
+               $rhapso_rels; do
+        if aws s3api head-object --bucket "$bucket" --key "${asset_key}/${rel}" >/dev/null 2>&1; then
+            s3_xml_path="${in_base}/${rel}"
+            ccf_xml_rel="${rel}"          # recorded in the process metadata
+            echo "CCF XML resolved to: ${rel}"
+            break
+        fi
+        echo "CCF XML not at: ${rel}"
+    done
+fi
+
+if [ -z "$s3_xml_path" ]; then
+    echo "ERROR: no CCF split-affine XML under ${in_base}/tile_alignment/ (checked the" >&2
+    echo "       legacy ch_ccf_xmls/ and rhapso/ layouts and any timestamped" >&2
+    echo "       rhapso*/ directories); aborting." >&2
     exit 1
 fi
 
